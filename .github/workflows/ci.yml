@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  guard:
+    name: No database or secret files
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail if forbidden files are tracked
+        run: |
+          forbidden=$(git ls-files | grep -E '\.(db|db-wal|db-shm|db-journal|sqlite|sqlite3|pem|key|p12)$|^web/static/pkg/|(^|/)\.env$' || true)
+          if [ -n "$forbidden" ]; then
+            echo "Forbidden files are tracked in git:"
+            echo "$forbidden"
+            exit 1
+          fi
+          echo "Clean: no database or secret files tracked."
+
+  test:
+    name: Build, lint, test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - name: Build, lint, and test the workspace
+        run: |
+          if [ ! -f Cargo.toml ]; then
+            echo "No Cargo workspace yet; nothing to build."
+            exit 0
+          fi
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets -- -D warnings
+          cargo test --workspace
+      - name: Build the wasm client
+        run: |
+          if [ ! -d web ]; then
+            echo "No web crate yet; skipping."
+            exit 0
+          fi
+          rustup target add wasm32-unknown-unknown
+          cargo build -p password-manager-web --target wasm32-unknown-unknown --release
