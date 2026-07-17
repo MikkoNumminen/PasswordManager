@@ -81,7 +81,7 @@ function isSafeUrl(value) {
 const TOKEN_KEY = "pm_token";
 // Bumped on every client change; shown in the footer so a stale cached
 // client is immediately recognizable.
-const CLIENT_VERSION = "client v4 (add/edit)";
+const CLIENT_VERSION = "client v5 (edit password)";
 
 // Some browser modes (private windows, clear-on-close settings) silently
 // drop or block localStorage. Probe it so the page can say so plainly
@@ -356,10 +356,18 @@ async function saveEntry() {
   // The timestamp must strictly increase per entry for last-write-wins sync.
   const prev = editingEntry ? editingEntry.modified_ms : 0;
   const modifiedMs = Math.max(Date.now(), prev + 1);
+  const password = $("f-password").value;
+  // Safety net: never let an empty field silently wipe an existing password
+  // (e.g. if the browser cleared it, or a mis-click).
+  if (editingEntry && editingEntry.password && !password) {
+    if (!confirm("The password field is empty, but this entry has a password. Save with no password?")) {
+      return;
+    }
+  }
   const data = {
     title,
     username: $("f-username").value,
-    password: $("f-password").value,
+    password,
     url: $("f-url").value,
     notes: $("f-notes").value,
     created_ms: createdMs,

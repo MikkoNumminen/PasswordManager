@@ -88,7 +88,9 @@ the server only ever sees ciphertext.</p>
   <input id="f-username" autocomplete="off">
   <label for="f-password">Password</label>
   <div class="field-row">
-    <input type="password" id="f-password" autocomplete="off">
+    <!-- new-password stops the browser's autofill from clearing or overwriting
+         the value we set when editing an existing entry. -->
+    <input type="password" id="f-password" autocomplete="new-password">
     <button id="f-show" class="small" type="button">show</button>
     <button id="f-gen" class="small" type="button">generate</button>
   </div>
