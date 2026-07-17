@@ -22,16 +22,15 @@ use password_manager_core::uuid::Uuid;
 use password_manager_core::{api, EntryRecord, VaultMeta};
 
 use crate::db::ServerDb;
-use crate::oidc::OidcVerifier;
 
+/// The app itself knows exactly one credential: the API token. Identity on
+/// the public path (Google via Cloudflare Access) is enforced at the edge
+/// before a request ever reaches this process, and is never an input to
+/// anything cryptographic. The server holds no key material and has no code
+/// path that could decrypt a record.
 pub struct AppState {
     pub db: Mutex<ServerDb>,
     pub token_hash: [u8; 32],
-    /// Google OIDC gate for the public web path. `None` keeps the API
-    /// token as the only credential (the tailnet default).
-    pub oidc: Option<OidcVerifier>,
-    /// OAuth client id published to the web page. Not a secret.
-    pub google_client_id: Option<String>,
 }
 
 type ApiError = (StatusCode, Json<serde_json::Value>);
@@ -56,7 +55,6 @@ pub fn router(state: Arc<AppState>, web_dir: Option<std::path::PathBuf>) -> Rout
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     let mut router = Router::new()
         .route(api::HEALTH, get(|| async { "ok" }))
-        .route(api::WEBCONFIG, get(webconfig))
         .merge(protected);
     if let Some(dir) = web_dir {
         router = router.fallback_service(tower_http::services::ServeDir::new(dir));
@@ -64,10 +62,10 @@ pub fn router(state: Arc<AppState>, web_dir: Option<std::path::PathBuf>) -> Rout
     router.with_state(state)
 }
 
-/// Bearer credential check. Two credentials exist and both authorize
-/// ciphertext access only: the API token, and (when configured) a Google ID
-/// token verified against issuer, audience, signature, and email allowlist.
-/// Neither has any role in key derivation.
+/// Bearer token check: the API token authorizes ciphertext access and
+/// nothing else. It has no role in key derivation; a valid token yields
+/// only ciphertext. Who may reach this service at all is decided upstream
+/// (tailnet membership, or Cloudflare Access on the public path).
 async fn auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> Response {
     let presented = req
         .headers()
@@ -77,13 +75,7 @@ async fn auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> R
     let ok = match presented {
         Some(token) => {
             let hash: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-            if bool::from(hash.ct_eq(&state.token_hash)) {
-                true
-            } else if let Some(verifier) = &state.oidc {
-                verifier.verify(token).await.is_ok()
-            } else {
-                false
-            }
+            bool::from(hash.ct_eq(&state.token_hash))
         }
         None => false,
     };
@@ -91,11 +83,6 @@ async fn auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> R
         return api_err(StatusCode::UNAUTHORIZED, "missing or invalid token").into_response();
     }
     next.run(req).await
-}
-
-/// Public, non-secret configuration for the web page.
-async fn webconfig(State(state): State<Arc<AppState>>) -> Json<serde_json::Value> {
-    Json(json!({ "google_client_id": state.google_client_id }))
 }
 
 async fn get_vault(State(state): State<Arc<AppState>>) -> Result<Json<VaultMeta>, ApiError> {

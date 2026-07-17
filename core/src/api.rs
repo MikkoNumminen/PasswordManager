@@ -6,7 +6,6 @@
 use uuid::Uuid;
 
 pub const HEALTH: &str = "/api/v1/health";
-pub const WEBCONFIG: &str = "/api/v1/webconfig";
 pub const VAULT: &str = "/api/v1/vault";
 pub const ENTRIES: &str = "/api/v1/entries";
 /// axum route pattern for one entry.

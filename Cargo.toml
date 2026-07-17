@@ -8,3 +8,11 @@ edition = "2021"
 
 [profile.release]
 lto = true
+
+# Argon2id at 256 MiB is deliberately expensive. Unoptimized it is unusable
+# (tests unlock dozens of times), so the KDF crates are always compiled with
+# optimizations, even in dev builds.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3

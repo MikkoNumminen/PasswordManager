@@ -36,8 +36,6 @@ fn make_state(db_path: &std::path::Path) -> Arc<AppState> {
     Arc::new(AppState {
         db: Mutex::new(db),
         token_hash,
-        oidc: None,
-        google_client_id: None,
     })
 }
 

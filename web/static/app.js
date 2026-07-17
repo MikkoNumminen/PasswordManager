@@ -5,7 +5,7 @@
 //
 // API paths mirror core/src/api.rs; change both together.
 
-let credential = null; // Google ID token or API token; authorizes blob access only.
+let credential = null; // API token; authorizes ciphertext access only.
 let metaJson = null; // Cleartext vault metadata (salt, KDF params, key check).
 
 const $ = (id) => document.getElementById(id);
@@ -70,27 +70,19 @@ function isSafeUrl(value) {
   }
 }
 
-async function boot() {
-  const cfg = await (await fetch("/api/v1/webconfig")).json();
-  if (cfg.google_client_id) {
-    show("google-signin");
-    const gsi = document.createElement("script");
-    gsi.src = "https://accounts.google.com/gsi/client";
-    gsi.onload = () => {
-      google.accounts.id.initialize({
-        client_id: cfg.google_client_id,
-        callback: (resp) => onAuthed(resp.credential),
-      });
-      google.accounts.id.renderButton($("google-button"), { theme: "filled_black" });
-    };
-    document.head.appendChild(gsi);
-  } else {
-    show("token-login");
-    $("token-go").addEventListener("click", () => {
-      const token = $("token").value.trim();
-      if (token) onAuthed(token);
-    });
-  }
+// Identity on the public path is enforced by Cloudflare Access at the edge
+// before any request reaches this page or the API. The page itself knows
+// exactly one credential: the API token, which authorizes ciphertext access
+// and has no role in key derivation.
+function boot() {
+  show("token-login");
+  $("token-go").addEventListener("click", () => {
+    const token = $("token").value.trim();
+    if (token) onAuthed(token);
+  });
+  $("token").addEventListener("keydown", (e) => {
+    if (e.key === "Enter") $("token-go").click();
+  });
 }
 
 async function onAuthed(value) {
@@ -201,7 +193,4 @@ $("lock").addEventListener("click", async () => {
   }
 });
 
-boot().catch((e) => {
-  $("auth-status").textContent = `Failed to load: ${e.message}`;
-  $("auth-status").classList.add("error");
-});
+boot();

@@ -52,16 +52,11 @@ enum Command {
             default_value = "127.0.0.1:7787"
         )]
         bind: SocketAddr,
-        /// Directory with the built web client. Enables the browser page.
+        /// Directory with the built web client. Enables the browser page,
+        /// served from this machine; no third party hosts the crypto code
+        /// the browser runs.
         #[arg(long, env = "PASSWORD_MANAGER_SERVER_WEB_DIR")]
         web_dir: Option<PathBuf>,
-        /// Google OAuth client id. Enables Google sign-in as a second
-        /// credential for the web page. Requires --allowed-email.
-        #[arg(long, env = "PASSWORD_MANAGER_GOOGLE_CLIENT_ID")]
-        google_client_id: Option<String>,
-        /// Email allowed through the Google OIDC gate. Repeatable.
-        #[arg(long = "allowed-email")]
-        allowed_emails: Vec<String>,
     },
     /// Generate the API token, store its hash, and print the token once.
     Token,
@@ -87,46 +82,22 @@ async fn main() -> Result<()> {
             eprintln!("Rerun `password-manager-server token` to replace it.");
             Ok(())
         }
-        Command::Serve {
-            bind,
-            web_dir,
-            google_client_id,
-            allowed_emails,
-        } => {
+        Command::Serve { bind, web_dir } => {
             let Some(token_hash) = db.token_hash()? else {
                 bail!("no API token configured; run `password-manager-server token` first");
             };
-            let oidc = match &google_client_id {
-                Some(client_id) => {
-                    if allowed_emails.is_empty() {
-                        bail!("--google-client-id requires at least one --allowed-email");
-                    }
-                    Some(password_manager_server::oidc::OidcVerifier::new(
-                        password_manager_server::oidc::OidcConfig {
-                            client_id: client_id.clone(),
-                            allowed_emails: allowed_emails
-                                .iter()
-                                .map(|e| e.to_lowercase())
-                                .collect(),
-                        },
-                    )?)
-                }
-                None => None,
-            };
+            // Identity on the public path is Cloudflare Access at the edge,
+            // never this process. The app authenticates only the API token,
+            // and neither gate touches key derivation.
             let state = Arc::new(AppState {
                 db: Mutex::new(db),
                 token_hash,
-                oidc,
-                google_client_id,
             });
             let listener = tokio::net::TcpListener::bind(bind)
                 .await
                 .with_context(|| format!("binding {bind}"))?;
             eprintln!("password-manager-server listening on http://{bind}");
             eprintln!("database: {}", cli.db.display());
-            if state.oidc.is_some() {
-                eprintln!("Google OIDC gate: enabled");
-            }
             if let Some(dir) = &web_dir {
                 eprintln!("web client: {}", dir.display());
             }
