@@ -88,9 +88,10 @@ the server only ever sees ciphertext.</p>
   <input id="f-username" autocomplete="off">
   <label for="f-password">Password</label>
   <div class="field-row">
-    <!-- new-password stops the browser's autofill from clearing or overwriting
-         the value we set when editing an existing entry. -->
-    <input type="password" id="f-password" autocomplete="new-password">
+    <!-- readonly + new-password: browsers skip autofill on readonly fields, so
+         the value we set when editing survives instead of being cleared. The
+         field is made editable on focus (see app.js). -->
+    <input type="password" id="f-password" autocomplete="new-password" readonly>
     <button id="f-show" class="small" type="button">show</button>
     <button id="f-gen" class="small" type="button">generate</button>
   </div>

@@ -81,7 +81,7 @@ function isSafeUrl(value) {
 const TOKEN_KEY = "pm_token";
 // Bumped on every client change; shown in the footer so a stale cached
 // client is immediately recognizable.
-const CLIENT_VERSION = "client v5 (edit password)";
+const CLIENT_VERSION = "client v6 (edit password)";
 
 // Some browser modes (private windows, clear-on-close settings) silently
 // drop or block localStorage. Probe it so the page can say so plainly
@@ -313,8 +313,12 @@ function openEditor(entry) {
   $("editor-title").textContent = entry ? "Edit entry" : "Add entry";
   $("f-title").value = entry ? entry.title : "";
   $("f-username").value = entry ? entry.username : "";
-  $("f-password").value = entry ? entry.password : "";
-  $("f-password").type = "password";
+  // Re-arm readonly before setting the value so the browser's autofill pass
+  // skips this field and leaves the value we set (focus makes it editable).
+  const pw = $("f-password");
+  pw.setAttribute("readonly", "");
+  pw.type = "password";
+  pw.value = entry ? entry.password : "";
   $("f-url").value = entry ? entry.url : "";
   $("f-notes").value = entry ? entry.notes : "";
   $("editor-status").textContent = "";
@@ -441,13 +445,17 @@ $("forget-token").addEventListener("click", () => {
 $("add").addEventListener("click", () => openEditor(null));
 $("editor-save").addEventListener("click", saveEntry);
 $("editor-cancel").addEventListener("click", closeEditor);
+// Focusing the field means the user wants to change it: make it editable.
+$("f-password").addEventListener("focus", () => $("f-password").removeAttribute("readonly"));
 $("f-show").addEventListener("click", () => {
   const f = $("f-password");
   f.type = f.type === "password" ? "text" : "password";
 });
 $("f-gen").addEventListener("click", () => {
-  $("f-password").value = generatePassword();
-  $("f-password").type = "text";
+  const f = $("f-password");
+  f.removeAttribute("readonly");
+  f.value = generatePassword();
+  f.type = "text";
 });
 
 boot();
