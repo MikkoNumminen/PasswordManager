@@ -12,6 +12,9 @@ crypto implementation shared by every client.
 - `web`: browser client. The same `core` crypto compiled to wasm32;
   decryption happens in the browser, so the server stays zero-knowledge on
   this path too.
+- `vaultctl`: control tool that runs and exposes the server on this machine
+  (tailnet path, the Google-gated public path, and the shared Tailscale
+  funnel). See `ops/README.md`.
 
 ## Threat model
 
