@@ -15,6 +15,9 @@ crypto implementation shared by every client.
 - `vaultctl`: control tool that runs and exposes the server on this machine
   (tailnet path, the Google-gated public path, and the shared Tailscale
   funnel). See `ops/README.md`.
+- `extension`: Chrome (Manifest V3) browser extension. The same `core` crypto
+  compiled to wasm32; looks up an entry for the current site and fills it,
+  read-only. See the Browser extension section below.
 
 ## Threat model
 
@@ -232,6 +235,58 @@ client id and secret live in Cloudflare and the tunnel token in an
 environment variable. Either way the API token exists only as a hash on the
 server and in each client's local storage. `.gitignore` excludes env files,
 key material, and credential files as a backstop.
+
+## Browser extension
+
+A Chrome Manifest V3 extension that fills credentials from the vault into the
+current tab, without opening the web page. It reuses the same `core` crypto
+compiled to wasm32; the master password and vault key never leave the
+extension, and the server still only serves ciphertext. It is read-only:
+add, edit, and delete stay in the CLI and web page.
+
+What it does: unlock, search, view (masked, reveal on click), fill into the
+current tab on an explicit click, and copy to the clipboard. It never
+auto-fills on page load, and it fills only when the entry's registrable
+domain (eTLD+1, via the Public Suffix List) matches the current tab, with an
+explicit warning and a second confirmation for a deliberate mismatch.
+
+Trust delta: a compromised browser profile reads whatever you decrypt in it,
+the same as any client. The vault key sits in memory-backed session storage
+(never on disk) while unlocked and is cleared on auto-lock or when the browser
+closes.
+
+Build and load:
+
+```
+cd extension
+pwsh build.ps1        # builds the wasm and downloads the Public Suffix List into vendor/
+```
+
+Then open `chrome://extensions`, enable Developer mode, Load unpacked, and
+pick the `extension/` directory. Open the extension's options, set the server
+URL and API token (Chrome will prompt to grant access to that one origin),
+and, if the public path is behind an auth gate, sign in once in a normal tab
+so the extension can ride the cookie.
+
+Extension tests (registrable-domain matching, including the phishing cases):
+
+```
+cd extension
+node --test test/psl.test.js
+```
+
+Manual test checklist:
+
+- Unlock with the master password; a wrong password is rejected.
+- Search; entries for the current site show first, with an "all sites" toggle.
+- Fill on a site whose domain matches an entry.
+- Pick an entry whose domain does not match the tab: the fill is refused until
+  you confirm the warning.
+- Wait for the auto-lock timer: the vault locks and asks for the master
+  password again.
+- Copy a password: it clears from the clipboard after 30 seconds if unchanged.
+- Behind an auth gate, a fetch that hits the login page shows "sign in
+  required" with a button to open the server.
 
 ## Development
 

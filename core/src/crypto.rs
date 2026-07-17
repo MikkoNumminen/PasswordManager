@@ -65,6 +65,14 @@ impl VaultKey {
     fn expose(&self) -> &[u8; KEY_LEN] {
         self.0.expose_secret()
     }
+
+    /// The raw key bytes. Only for a client that must hold the key in a
+    /// memory-only store across a process restart it cannot avoid (the
+    /// browser extension's `chrome.storage.session`). The bytes stay inside
+    /// that client; never write them to disk or send them anywhere.
+    pub(crate) fn as_bytes(&self) -> &[u8; KEY_LEN] {
+        self.expose()
+    }
 }
 
 /// Fill a buffer from the operating system RNG.
