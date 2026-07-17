@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Content-Security-Policy: last-line defense for a page that decrypts secrets
+  in the DOM. Restricts where scripts may load from and where the page may
+  connect, so an injected script cannot exfiltrate the decrypted vault.
+  - script-src allows this origin (app.js), the wasm eval the bindings need,
+    and Google Identity Services for the sign-in button.
+  - connect-src allows this origin (the sync API) and Google's token endpoints.
+  - style-src allows the inline <style> block below.
+  For a hardened deployment, prefer serving this header from the reverse proxy
+  or tunnel with a nonce instead of 'unsafe-inline'.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com; worker-src 'self'; connect-src 'self' https://accounts.google.com https://www.googleapis.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' https://accounts.google.com data:; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'">
+<title>PasswordManager</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #14161a; color: #e6e6e6;
+         max-width: 60rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.4rem; }
+  .card { background: #1d2026; border: 1px solid #2c313a; border-radius: 8px;
+          padding: 1rem; margin: 1rem 0; }
+  input { background: #14161a; color: #e6e6e6; border: 1px solid #3a4150;
+          border-radius: 4px; padding: 0.5rem; font-size: 1rem; width: 100%;
+          box-sizing: border-box; margin: 0.25rem 0 0.75rem; }
+  button { background: #2f6feb; color: white; border: 0; border-radius: 4px;
+           padding: 0.5rem 1rem; font-size: 0.95rem; cursor: pointer; }
+  button.small { padding: 0.2rem 0.6rem; font-size: 0.8rem; background: #3a4150; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { text-align: left; padding: 0.45rem 0.5rem; border-bottom: 1px solid #2c313a;
+           font-size: 0.92rem; word-break: break-all; }
+  th { color: #9aa4b2; font-weight: 600; }
+  .muted { color: #9aa4b2; font-size: 0.85rem; }
+  .error { color: #ff7b72; }
+  .hidden { display: none; }
+  code { background: #14161a; padding: 0.1rem 0.3rem; border-radius: 3px; }
+</style>
+</head>
+<body>
+<h1>PasswordManager</h1>
+<p class="muted">Zero-knowledge vault. Decryption happens in this browser;
+the server only ever sees ciphertext.</p>
+
+<div id="auth" class="card">
+  <div id="google-signin" class="hidden">
+    <p>Sign in to authorize ciphertext access.</p>
+    <div id="google-button"></div>
+  </div>
+  <div id="token-login" class="hidden">
+    <label for="token">Server API token</label>
+    <input type="password" id="token" autocomplete="off">
+    <button id="token-go">Connect</button>
+  </div>
+  <p id="auth-status" class="muted"></p>
+</div>
+
+<div id="unlock" class="card hidden">
+  <label for="master">Master password</label>
+  <input type="password" id="master" autocomplete="off">
+  <button id="unlock-go">Unlock</button>
+  <p class="muted">Key derivation runs in the browser and takes a few
+  seconds. The password never leaves this page.</p>
+  <p id="unlock-status" class="muted"></p>
+</div>
+
+<div id="vault" class="card hidden">
+  <button id="lock">Lock</button>
+  <table>
+    <thead><tr><th>Title</th><th>Username</th><th>Password</th><th>URL</th><th></th></tr></thead>
+    <tbody id="entries"></tbody>
+  </table>
+</div>
+
+<script type="module" src="./app.js"></script>
+</body>
+</html>
