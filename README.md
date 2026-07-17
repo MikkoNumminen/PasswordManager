@@ -45,26 +45,39 @@ What this does not protect against:
   (each ciphertext is bound to its UUID and timestamp), but it can serve
   an older complete record instead of the newest one.
 
-The public web access path, when enabled, works like this: the server runs
-self-hosted on my machine with no public IP, a Cloudflare Tunnel connects
-outward, and Cloudflare Access gates the hostname at the edge with Google
-as the identity provider and an email allowlist. Identity is enforced
-before any request reaches the app; the app itself contains no OAuth or
-identity code. The service is reachable only while my machine is on.
+The public web access path, when enabled, runs on Tailscale Funnel. The
+server stays bound to localhost with no public IP. Tailscale Funnel forwards
+an encrypted TCP stream from a ts.net hostname to this machine, where
+tailscaled terminates TLS using the ts.net certificate; the funnel relay
+carries only encrypted bytes and never sees plaintext traffic. In front of
+the server, on this same machine, oauth2-proxy runs the identity gate:
+Google sign-in restricted to an email allowlist. The vault server itself
+contains no identity code; who may reach it is decided by oauth2-proxy
+before a request arrives. The service is reachable only while this machine
+is on and the funnel is toggled on.
 
 What that path adds, plainly:
 
-- A public URL is a scanning and phishing target even behind the edge
-  gate. A convincing fake of the page could capture a master password
-  from a careless moment; the real page is only ever served from my
-  origin through my hostname.
-- Trust in Cloudflare to enforce the Access policy. If the edge gate is
-  bypassed or misconfigured, an attacker reaches the API and, with the
-  API token, ciphertext. From there the master password plus Argon2id is
-  the entire remaining boundary. Password strength is the real security
-  of this system; everything else buys time and reduces exposure.
+- A public URL is a scanning and phishing target even behind the gate. A
+  convincing fake of the page could capture a master password from a
+  careless moment; the real page is only ever served from this machine.
+- Trust in Tailscale to route and relay, and in oauth2-proxy plus Google
+  for identity. Because TLS terminates on this machine, the relay never
+  terminates TLS or sees plaintext. If the gate is bypassed or
+  misconfigured, an attacker reaches the API and, with the API token,
+  ciphertext. From there the master password plus Argon2id is the entire
+  remaining boundary. Password strength is the real security of this
+  system; everything else buys time and reduces exposure.
 - A compromised browser or browser session reads whatever you decrypt in
   it, exactly as on any client.
+
+An alternative public path is Cloudflare Tunnel plus Cloudflare Access
+(documented under Public exposure below). Its trust model differs: TLS
+terminates at Cloudflare's edge, so Cloudflare sees the HTTP traffic (the
+API token and request metadata, though vault payloads are still ciphertext),
+and identity is enforced by Cloudflare Access rather than a local proxy.
+Choose it only if you accept a third party terminating TLS in exchange for
+edge features. The two paths are not run at once.
 
 Public exposure is opt-in and off by default.
 
@@ -85,10 +98,11 @@ Public exposure is opt-in and off by default.
   verified under the vault key before it is stored, and change detection
   does not depend on device clocks agreeing. ADR 0006.
 - The app checks one credential: the API token, which gates ciphertext
-  access only. Identity on the public path (Cloudflare Access with
-  Google) is enforced at the edge, outside the app, and neither is ever
-  an input to key derivation. Losing them exposes no vault contents.
-  ADR 0007.
+  access only. Identity on the public path is enforced outside the app:
+  oauth2-proxy (Google, email allowlist) in front of the server on the
+  Tailscale Funnel path in use, or Cloudflare Access on the alternative
+  Cloudflare path. Neither identity nor the token is ever an input to key
+  derivation; losing them exposes no vault contents. ADR 0007.
 - The wasm client is served by the same server from the same machine. No
   third party hosts the crypto code the browser runs.
 - Primitives are vetted RustCrypto crates: `argon2`, `chacha20poly1305`,
@@ -167,15 +181,33 @@ On the tailnet that is the whole setup: open the page, enter the API
 token, unlock with the master password. Decryption happens in the browser;
 the master password never leaves the page.
 
-## Public exposure (opt-in, Cloudflare Tunnel plus Access)
+## Public exposure (opt-in)
 
-Off by default. Enabling it is a deliberate multi-step act, and the app
-itself contains no identity code; who may reach it is decided at
-Cloudflare's edge before a request arrives.
+Off by default. Two paths with different trust models; only one runs at a
+time. Read the threat model section before enabling either.
 
-1. Keep the server bound to localhost: `--bind 127.0.0.1:7787`.
-2. Create a named tunnel and route a hostname of your own domain to it
-   (pick the hostname freely; it is configuration, not code):
+### Tailscale Funnel plus oauth2-proxy (the path in use)
+
+The server stays on localhost, oauth2-proxy provides the Google identity
+gate in front of it, and Tailscale Funnel exposes the machine's ts.net
+hostname. TLS terminates on this machine, and the funnel relay forwards only
+encrypted TCP. The full operational setup and the `vaultctl` control tool
+that runs it are in `ops/README.md`. In short:
+
+1. Keep the server bound to localhost.
+2. Create a Google OAuth client (Web application), with the ts.net funnel
+   URL as an authorized origin and `.../oauth2/callback` as a redirect URI.
+3. Put the client id, client secret, and your allowlisted email in the
+   out-of-repo secrets under the data directory (never in this repo).
+4. `vaultctl up` starts the vault, the oauth2-proxy gate, and the funnel;
+   `vaultctl down` stops and unexposes.
+
+### Cloudflare Tunnel plus Cloudflare Access (alternative)
+
+A different trust model: TLS terminates at Cloudflare's edge, Cloudflare
+sees the HTTP traffic (the API token and metadata, though vault payloads
+stay ciphertext), and Cloudflare Access enforces identity rather than a
+local proxy. Keep the server on localhost, then:
 
 ```
 cloudflared tunnel create password-manager
@@ -183,31 +215,23 @@ cloudflared tunnel route dns password-manager vault.example.com
 cloudflared tunnel run password-manager
 ```
 
-   The tunnel config maps `vault.example.com` to
-   `http://127.0.0.1:7787`. The origin has no public IP and no open
-   inbound port; `cloudflared` connects outward. Run it with the tunnel
-   token in an environment variable or the cloudflared service store,
-   never in this repository.
+In Cloudflare Zero Trust, add Google as an identity provider and create an
+Access application for the hostname with an Allow policy restricted to your
+email. The tunnel token lives in an environment variable or the cloudflared
+service store, never in this repository.
 
-3. In Cloudflare Zero Trust, add Google as an identity provider (its
-   client id and secret live in Cloudflare, not here), then create an
-   Access application for `vault.example.com` with an Allow policy
-   restricted to your email. From then on Cloudflare serves a Google
-   login at the edge, and only allowlisted identities ever reach the
-   tunnel.
-
-Cloudflare Access and Google decide who can reach the service and nothing
-else. They are never inputs to key derivation, and a valid Google session
-still yields only ciphertext without the master password. Read the threat
-model section on this path before enabling it.
+Both paths keep the vault server free of identity code, and neither
+identity nor the API token is ever an input to key derivation.
 
 ## Secrets
 
-Nothing secret is committed. The Google OAuth client id and secret live in
-Cloudflare, the tunnel token lives in an environment variable or the
-cloudflared service store, and the API token exists only as a hash on the
-server and in each client's local database. `.gitignore` excludes env
-files, key material, and cloudflared credentials as a backstop.
+Nothing secret is committed. On the Tailscale Funnel path, the Google OAuth
+client id and secret and the oauth2-proxy cookie secret live outside the
+repo under the data directory. On the Cloudflare alternative, the Google
+client id and secret live in Cloudflare and the tunnel token in an
+environment variable. Either way the API token exists only as a hash on the
+server and in each client's local storage. `.gitignore` excludes env files,
+key material, and credential files as a backstop.
 
 ## Development
 
