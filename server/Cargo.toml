@@ -1,0 +1,31 @@
+[package]
+name = "password-manager-server"
+description = "Zero-knowledge sync server for PasswordManager"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+# Models only. No crypto features, no client storage: the server never
+# holds key material and this dependency line keeps that visible.
+password-manager-core = { path = "../core", default-features = false }
+anyhow = "1"
+axum = "0.8"
+clap = { version = "4", features = ["derive", "env"] }
+getrandom = "0.2"
+hex = "0.4"
+jsonwebtoken = "9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "native-tls"] }
+tower-http = { version = "0.6", features = ["fs"] }
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+
+[dev-dependencies]
+base64 = "0.22"
+password-manager-core = { path = "../core", features = ["remote"] }
+http-body-util = "0.1"
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }
