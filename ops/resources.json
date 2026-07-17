@@ -1,0 +1,33 @@
+{
+  "_comment": "Funnel resources on the shared node paskamyrsky.tail6ed53b.ts.net. The two RAGs are GPU-bound, both funnel on port 443 (default), run one at a time, and are each managed by their OWN tool - this panel shows them read-only and never touches their funnel. The vault needs no GPU and carries a Google gate, so it owns funnel port 8443 and coexists with whichever RAG is on 443. Funnel allows only 443/8443/10000; never run `tailscale funnel reset` (it would wipe every service at once).",
+  "resources": [
+    {
+      "name": "vault",
+      "label": "PasswordManager vault",
+      "owned": true,
+      "funnel_port": 8443,
+      "target": "http://127.0.0.1:4180",
+      "note": "funnel 8443 -> oauth2-proxy (Google gate) -> vault :7787"
+    },
+    {
+      "name": "rag-mikkonumminen",
+      "label": "mikkonumminen.dev RAG chat",
+      "owned": false,
+      "funnel_port": 443,
+      "local": "http://127.0.0.1:8000",
+      "tool": "ragctl up | ragctl down",
+      "dir": "D:\\koodaamista\\mikkonumminen.dev\\chat-backend",
+      "note": "GPU-bound; managed by ragctl (Python/WSL). Read-only here."
+    },
+    {
+      "name": "rag-feedback",
+      "label": "Feedback Intelligence",
+      "owned": false,
+      "funnel_port": 443,
+      "local": "http://127.0.0.1:5088",
+      "tool": "feedctl up | feedctl down",
+      "dir": "D:\\koodaamista\\feedback-intelligence",
+      "note": "GPU-bound; managed by feedctl (.NET). Read-only here."
+    }
+  ]
+}
