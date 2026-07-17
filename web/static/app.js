@@ -71,12 +71,13 @@ function isSafeUrl(value) {
   }
 }
 
-// Identity on the public path is enforced by Cloudflare Access at the edge
-// before any request reaches this page or the API. The page itself knows
-// exactly one credential: the API token, which authorizes ciphertext access
-// and has no role in key derivation.
+// The page knows exactly one credential: the API token, which authorizes
+// ciphertext access only (no role in key derivation). It is remembered in
+// this browser's localStorage so it is entered once per device; the master
+// password is never stored and is required on every unlock.
+const TOKEN_KEY = "pm_token";
+
 function boot() {
-  show("token-login");
   $("token-go").addEventListener("click", () => {
     const token = $("token").value.trim();
     if (token) onAuthed(token);
@@ -84,23 +85,56 @@ function boot() {
   $("token").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("token-go").click();
   });
+  const saved = localStorage.getItem(TOKEN_KEY);
+  if (saved) {
+    onAuthed(saved); // straight past the token step to the master password
+  } else {
+    show("token-login");
+  }
 }
 
 async function onAuthed(value) {
   credential = value;
+  $("auth-status").classList.remove("error");
   $("auth-status").textContent = "Checking access...";
+  let resp;
   try {
-    metaJson = await api("/api/v1/vault");
+    resp = await fetch("/api/v1/vault", { headers: { Authorization: `Bearer ${value}` } });
   } catch (e) {
-    // 404 means the token worked but no vault has been synced to this server
-    // yet, which is a setup step, not an access failure.
-    $("auth-status").textContent = String(e.message).includes("404")
-      ? "No vault on this server yet. Create one with the CLI and run sync, then reload."
-      : `No access: ${e.message}`;
+    $("auth-status").textContent = `Cannot reach the server: ${e.message ?? e}`;
     $("auth-status").classList.add("error");
+    show("token-login");
     credential = null;
     return;
   }
+  if (resp.status === 401) {
+    // A stale/wrong token: forget it and ask again.
+    localStorage.removeItem(TOKEN_KEY);
+    credential = null;
+    $("token").value = "";
+    show("token-login");
+    $("auth-status").textContent = "Token was rejected. Enter it again.";
+    $("auth-status").classList.add("error");
+    return;
+  }
+  if (resp.status === 404) {
+    // Token is valid, but no vault has been synced to this server yet.
+    localStorage.setItem(TOKEN_KEY, value);
+    show("token-login");
+    $("auth-status").textContent =
+      "No vault on this server yet. Create one with the CLI and run sync, then reload.";
+    $("auth-status").classList.add("error");
+    return;
+  }
+  if (!resp.ok) {
+    $("auth-status").textContent = `No access: ${resp.status}`;
+    $("auth-status").classList.add("error");
+    show("token-login");
+    credential = null;
+    return;
+  }
+  metaJson = await resp.text();
+  localStorage.setItem(TOKEN_KEY, value); // remember for next visit
   hide("auth");
   show("unlock");
   $("master").focus();
@@ -339,6 +373,10 @@ $("lock").addEventListener("click", async () => {
   } finally {
     location.reload();
   }
+});
+$("forget-token").addEventListener("click", () => {
+  localStorage.removeItem(TOKEN_KEY);
+  location.reload();
 });
 $("add").addEventListener("click", () => openEditor(null));
 $("editor-save").addEventListener("click", saveEntry);

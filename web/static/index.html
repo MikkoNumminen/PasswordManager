@@ -52,9 +52,9 @@ the server only ever sees ciphertext.</p>
     <label for="token">Server API token</label>
     <input type="password" id="token" autocomplete="off">
     <button id="token-go">Connect</button>
-    <p class="muted">The token authorizes ciphertext access only. On the
-    public path, Cloudflare Access has already checked who you are before
-    this page loaded.</p>
+    <p class="muted">Entered once and remembered on this device. It authorizes
+    ciphertext access only; your master password is still required every time
+    and is never stored.</p>
   </div>
   <p id="auth-status" class="muted"></p>
 </div>
@@ -66,6 +66,7 @@ the server only ever sees ciphertext.</p>
   <p class="muted">Key derivation runs in the browser and takes a few
   seconds. The password never leaves this page.</p>
   <p id="unlock-status" class="muted"></p>
+  <p class="muted"><button id="forget-token" class="small" type="button">forget token on this device</button></p>
 </div>
 
 <div id="vault" class="card hidden">
