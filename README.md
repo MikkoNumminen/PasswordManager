@@ -42,17 +42,34 @@ What this does not protect against:
   (each ciphertext is bound to its UUID and timestamp), but it can serve
   an older complete record instead of the newest one.
 
-The public web access path, when enabled, adds internet-facing attack
-surface: the server endpoint, the OAuth gate, and the browser runtime all
-become reachable from outside. The server stays zero-knowledge on that
-path, and the tradeoff is real: a reachable endpoint can be probed, and a
-compromised browser or browser session reads whatever you decrypt in it.
+The public web access path, when enabled, works like this: the server runs
+self-hosted on my machine with no public IP, a Cloudflare Tunnel connects
+outward, and Cloudflare Access gates the hostname at the edge with Google
+as the identity provider and an email allowlist. Identity is enforced
+before any request reaches the app; the app itself contains no OAuth or
+identity code. The service is reachable only while my machine is on.
+
+What that path adds, plainly:
+
+- A public URL is a scanning and phishing target even behind the edge
+  gate. A convincing fake of the page could capture a master password
+  from a careless moment; the real page is only ever served from my
+  origin through my hostname.
+- Trust in Cloudflare to enforce the Access policy. If the edge gate is
+  bypassed or misconfigured, an attacker reaches the API and, with the
+  API token, ciphertext. From there the master password plus Argon2id is
+  the entire remaining boundary. Password strength is the real security
+  of this system; everything else buys time and reduces exposure.
+- A compromised browser or browser session reads whatever you decrypt in
+  it, exactly as on any client.
+
 Public exposure is opt-in and off by default.
 
 ## Security design, in short
 
-- Argon2id (RFC 9106: 64 MiB, 3 passes, 1 lane) derives the vault key from
-  the master password. Per-vault random salt. ADR 0001.
+- Argon2id (256 MiB, 3 passes, 1 lane; far above library defaults, about
+  430 ms per unlock natively) derives the vault key from the master
+  password. Per-vault random salt. ADR 0001.
 - XChaCha20-Poly1305 seals each entry under a fresh random 24 byte nonce
   on every write. ADR 0002, 0003.
 - Ciphertext is bound to entry UUID and modified timestamp via associated
@@ -64,9 +81,13 @@ Public exposure is opt-in and off by default.
   copies, never silently dropped. Every record pulled from the server is
   verified under the vault key before it is stored, and change detection
   does not depend on device clocks agreeing. ADR 0006.
-- Credentials (API token, Google OIDC) gate ciphertext access only and are
-  never inputs to key derivation. Losing them exposes no vault contents.
+- The app checks one credential: the API token, which gates ciphertext
+  access only. Identity on the public path (Cloudflare Access with
+  Google) is enforced at the edge, outside the app, and neither is ever
+  an input to key derivation. Losing them exposes no vault contents.
   ADR 0007.
+- The wasm client is served by the same server from the same machine. No
+  third party hosts the crypto code the browser runs.
 - Primitives are vetted RustCrypto crates: `argon2`, `chacha20poly1305`,
   `getrandom`, `zeroize`, `secrecy`, `subtle`. Nothing hand-rolled.
 
@@ -119,7 +140,7 @@ is stored in the local vault database; it authorizes ciphertext access
 only. After rotating the server token, run
 `password-manager sync --set-token` to enter the new one.
 
-## Web access page (opt-in public path)
+## Web access page
 
 Build the wasm client once (requires the wasm target and a matching
 wasm-bindgen CLI):
@@ -131,36 +152,59 @@ cargo build -p password-manager-web --target wasm32-unknown-unknown --release
 wasm-bindgen --target web --no-typescript --out-dir web/static/pkg target/wasm32-unknown-unknown/release/password_manager_web.wasm
 ```
 
-Serve it with the server:
+Serve it with the server, from the same machine. The page, its JavaScript,
+and the wasm crypto module all come from this process; no third party ever
+hosts the code the browser runs:
 
 ```
 password-manager-server serve --bind <tailnet-ip>:7787 --web-dir web/static
 ```
 
-On the tailnet the page works with the API token. For public exposure, add
-the Google OIDC gate:
+On the tailnet that is the whole setup: open the page, enter the API
+token, unlock with the master password. Decryption happens in the browser;
+the master password never leaves the page.
 
-1. Create an OAuth client id (type: Web application) in the Google Cloud
-   console. Add your public origin to the authorized JavaScript origins.
-2. Run the server with the gate:
+## Public exposure (opt-in, Cloudflare Tunnel plus Access)
+
+Off by default. Enabling it is a deliberate multi-step act, and the app
+itself contains no identity code; who may reach it is decided at
+Cloudflare's edge before a request arrives.
+
+1. Keep the server bound to localhost: `--bind 127.0.0.1:7787`.
+2. Create a named tunnel and route a hostname of your own domain to it
+   (pick the hostname freely; it is configuration, not code):
 
 ```
-password-manager-server serve --bind 127.0.0.1:7787 --web-dir web/static \
-    --google-client-id <id>.apps.googleusercontent.com \
-    --allowed-email you@example.com
+cloudflared tunnel create password-manager
+cloudflared tunnel route dns password-manager vault.example.com
+cloudflared tunnel run password-manager
 ```
 
-3. Publish the port through a tunnel you set up deliberately, for example
-   Cloudflare Tunnel (`cloudflared tunnel --url http://127.0.0.1:7787`
-   for a quick test, or a named tunnel with your own domain for real use).
-   The tunnel provides TLS.
+   The tunnel config maps `vault.example.com` to
+   `http://127.0.0.1:7787`. The origin has no public IP and no open
+   inbound port; `cloudflared` connects outward. Run it with the tunnel
+   token in an environment variable or the cloudflared service store,
+   never in this repository.
 
-The page signs you in with Google, pulls ciphertext, and decrypts in the
-browser with the master password. Google's ID token authorizes ciphertext
-access only; the master password never leaves the page. Deriving the key
-in the browser takes a few seconds by design.
+3. In Cloudflare Zero Trust, add Google as an identity provider (its
+   client id and secret live in Cloudflare, not here), then create an
+   Access application for `vault.example.com` with an Allow policy
+   restricted to your email. From then on Cloudflare serves a Google
+   login at the edge, and only allowlisted identities ever reach the
+   tunnel.
 
-Remember what the threat model says about this path before enabling it.
+Cloudflare Access and Google decide who can reach the service and nothing
+else. They are never inputs to key derivation, and a valid Google session
+still yields only ciphertext without the master password. Read the threat
+model section on this path before enabling it.
+
+## Secrets
+
+Nothing secret is committed. The Google OAuth client id and secret live in
+Cloudflare, the tunnel token lives in an environment variable or the
+cloudflared service store, and the API token exists only as a hash on the
+server and in each client's local database. `.gitignore` excludes env
+files, key material, and cloudflared credentials as a backstop.
 
 ## Development
 

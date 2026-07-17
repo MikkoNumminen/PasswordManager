@@ -5,16 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <!--
   Content-Security-Policy: last-line defense for a page that decrypts secrets
-  in the DOM. Restricts where scripts may load from and where the page may
-  connect, so an injected script cannot exfiltrate the decrypted vault.
-  - script-src allows this origin (app.js), the wasm eval the bindings need,
-    and Google Identity Services for the sign-in button.
-  - connect-src allows this origin (the sync API) and Google's token endpoints.
-  - style-src allows the inline <style> block below.
-  For a hardened deployment, prefer serving this header from the reverse proxy
-  or tunnel with a nonce instead of 'unsafe-inline'.
+  in the DOM. Everything loads from this origin only: scripts, the crypto
+  worker, and API connections. No third party serves any code this page runs;
+  identity on the public path is enforced upstream by Cloudflare Access and
+  never appears here. style-src allows the inline <style> block below; a
+  hardened deployment can move it to a file and drop 'unsafe-inline'.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com; worker-src 'self'; connect-src 'self' https://accounts.google.com https://www.googleapis.com; style-src 'self' 'unsafe-inline' https://accounts.google.com; img-src 'self' https://accounts.google.com data:; frame-src https://accounts.google.com; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <title>PasswordManager</title>
 <style>
   :root { color-scheme: dark; }
@@ -45,14 +42,13 @@
 the server only ever sees ciphertext.</p>
 
 <div id="auth" class="card">
-  <div id="google-signin" class="hidden">
-    <p>Sign in to authorize ciphertext access.</p>
-    <div id="google-button"></div>
-  </div>
   <div id="token-login" class="hidden">
     <label for="token">Server API token</label>
     <input type="password" id="token" autocomplete="off">
     <button id="token-go">Connect</button>
+    <p class="muted">The token authorizes ciphertext access only. On the
+    public path, Cloudflare Access has already checked who you are before
+    this page loaded.</p>
   </div>
   <p id="auth-status" class="muted"></p>
 </div>

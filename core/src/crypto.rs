@@ -38,11 +38,15 @@ pub struct KdfParams {
 }
 
 impl Default for KdfParams {
-    /// RFC 9106 second recommended option: 64 MiB memory, 3 passes, 1 lane.
-    /// See docs/adr/0001-kdf-params.md.
+    /// 256 MiB memory, 3 passes, 1 lane. Deliberately far above library
+    /// defaults: on the public access path the master password plus this
+    /// derivation is the entire security boundary if ciphertext leaks.
+    /// One parameter set serves native and browser, because the parameters
+    /// travel with the vault and every client must derive the same key.
+    /// See docs/adr/0001-kdf-argon2id-params.md for numbers and reasoning.
     fn default() -> Self {
         Self {
-            m_cost_kib: 64 * 1024,
+            m_cost_kib: 256 * 1024,
             t_cost: 3,
             p_cost: 1,
         }
