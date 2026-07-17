@@ -29,15 +29,11 @@ fn read_stdin_line() -> Result<String> {
 }
 
 /// Read a secret without echo. Never taken as a command line argument.
-///
-/// The bytes are held in a single allocation that is moved into the returned
-/// `SecretString` and zeroized when it drops, with no intermediate copy left
-/// behind in freed heap memory.
 pub fn read_password(prompt: &str) -> Result<SecretString> {
     prompt_to_stderr(prompt)?;
     if io::stdin().is_terminal() {
         let pw = rpassword::read_password().context("reading password")?;
-        Ok(SecretString::from(pw))
+        Ok(into_secret(pw))
     } else {
         let mut line = String::new();
         let n = io::stdin()
@@ -48,12 +44,23 @@ pub fn read_password(prompt: &str) -> Result<SecretString> {
             line.zeroize();
             anyhow::bail!("unexpected end of input");
         }
-        // Trim the newline in place so the secret is never copied into a
-        // second buffer, then hand the sole allocation to SecretString.
         let end = line.trim_end_matches(['\r', '\n']).len();
         line.truncate(end);
-        Ok(SecretString::from(line))
+        Ok(into_secret(line))
     }
+}
+
+/// Move a secret string into a `SecretString` without leaving unzeroized
+/// copies behind. `SecretString::from(String)` shrinks the buffer, and a
+/// shrink reallocates whenever capacity exceeds length (which read buffers
+/// almost always do), freeing the original bytes unzeroized. Copying into an
+/// exact-size buffer first makes that shrink a no-op, and the source buffer
+/// is zeroized here.
+fn into_secret(mut source: String) -> SecretString {
+    let mut exact = String::with_capacity(source.len());
+    exact.push_str(&source);
+    source.zeroize();
+    SecretString::from(exact)
 }
 
 /// Read one line of non-secret input.

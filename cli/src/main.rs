@@ -426,6 +426,14 @@ fn cmd_sync(store: &mut LocalSqlite, server_arg: Option<String>, set_token: bool
         report.pulled,
         report.conflicts.len()
     );
+    if report.skipped_unverifiable > 0 {
+        eprintln!(
+            "WARNING: {} record(s) from the server failed authentication under \
+             your vault key and were ignored. The server data may be tampered \
+             with or corrupted.",
+            report.skipped_unverifiable
+        );
+    }
     for conflict in &report.conflicts {
         let winner = match conflict.winner {
             Side::Local => "this device",
