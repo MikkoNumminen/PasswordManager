@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["core", "cli", "server", "web"]
+members = ["core", "cli", "server", "web", "vaultctl"]
 
 [workspace.package]
 version = "0.1.0"
