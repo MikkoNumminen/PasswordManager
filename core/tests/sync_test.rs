@@ -250,6 +250,46 @@ fn forged_remote_records_are_ignored() {
     // The genuine record is untouched and the forged deletion never landed.
     assert_eq!(store.entry(id).unwrap().unwrap(), real);
     assert!(store.entry(forged_delete.id).unwrap().is_none());
+    // The drops are surfaced, never silent.
+    assert_eq!(report.skipped_unverifiable, 2);
+}
+
+/// Regression: a server rollback (or replay of an old backup) must not
+/// silently revert data this device already synced. The clean local record
+/// is newer; it gets re-pushed instead of being overwritten.
+#[test]
+fn server_rollback_does_not_revert_synced_data() {
+    let (vault, meta) = Vault::create(&password(), test_kdf()).unwrap();
+    let mut store = LocalSqlite::open_in_memory().unwrap();
+    store.init_vault(&meta).unwrap();
+    let mut remote = MemRemote::default();
+
+    // v1 synced, then v2 synced.
+    let id = new_entry_id().unwrap();
+    let v1 = vault.seal_entry(id, 100, &entry("v1")).unwrap();
+    store.upsert_entry(&v1).unwrap();
+    sync(&vault, &mut store, &mut remote, 150).unwrap();
+    let v2 = vault.seal_entry(id, 200, &entry("v2")).unwrap();
+    store.upsert_entry(&v2).unwrap();
+    sync(&vault, &mut store, &mut remote, 250).unwrap();
+    assert_eq!(remote.entries.get(&id).unwrap(), &v2);
+
+    // The server is restored from an old backup that still holds v1.
+    remote.entries.insert(id, v1.clone());
+
+    let report = sync(&vault, &mut store, &mut remote, 300).unwrap();
+    assert_eq!(report.pushed, 1, "the newer local version is restored");
+    assert_eq!(report.pulled, 0);
+    assert_eq!(
+        store.entry(id).unwrap().unwrap(),
+        v2,
+        "local data not reverted"
+    );
+    assert_eq!(
+        remote.entries.get(&id).unwrap(),
+        &v2,
+        "server restored to v2"
+    );
 }
 
 #[test]
