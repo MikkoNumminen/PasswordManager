@@ -165,18 +165,21 @@ fn aad_with_prefix(prefix: &[u8], id: Uuid, modified_ms: i64) -> Vec<u8> {
 }
 
 /// Deterministic UUID for the conflict copy that preserves a losing version.
-/// Derived (UUIDv5) from the losing record's identity, so replaying an
-/// interrupted sync regenerates the same copy id and the upsert is idempotent
-/// instead of minting a fresh duplicate on every retry.
+/// Derived (UUIDv5) from the losing record's identity AND its random nonce:
+/// replaying an interrupted sync regenerates the same copy id (idempotent
+/// retries, no duplicates), while two different losing versions can never
+/// collide on one copy id, even with identical entry id and timestamp,
+/// because every seal draws a fresh nonce.
 pub fn conflict_copy_id(loser: &EntryRecord) -> Uuid {
     // Namespace: a fixed random UUID for this application's conflict copies.
     const NS: Uuid = Uuid::from_bytes([
         0x8b, 0x1a, 0x9d, 0x4c, 0x5e, 0x2f, 0x47, 0x6a, 0x9c, 0x3d, 0x21, 0x0e, 0x7f, 0x88, 0x54,
         0x63,
     ]);
-    let mut name = Vec::with_capacity(16 + 8);
+    let mut name = Vec::with_capacity(16 + 8 + loser.nonce.len());
     name.extend_from_slice(loser.id.as_bytes());
     name.extend_from_slice(&loser.modified_ms.to_be_bytes());
+    name.extend_from_slice(&loser.nonce);
     Uuid::new_v5(&NS, &name)
 }
 

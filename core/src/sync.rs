@@ -87,6 +87,10 @@ pub struct SyncReport {
     pub pushed: usize,
     pub pulled: usize,
     pub conflicts: Vec<Conflict>,
+    /// Records the server sent that failed authentication under the vault
+    /// key and were ignored. Anything above zero means the server returned
+    /// forged or corrupted data and deserves attention.
+    pub skipped_unverifiable: usize,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -119,19 +123,22 @@ pub fn sync<L: Storage, R: SyncRemote>(
     // Pull the whole remote set and drop anything the vault key cannot
     // authenticate. A malicious or buggy server cannot inject a forged record
     // or deletion this way: unverifiable records never reach local storage.
-    let remote_all: BTreeMap<Uuid, EntryRecord> = remote
-        .changed_since(i64::MIN)?
+    // Every drop is counted and surfaced; silence would hide a tampering
+    // server from the user.
+    let mut report = SyncReport::default();
+    let fetched = remote.changed_since(i64::MIN)?;
+    let fetched_count = fetched.len();
+    let remote_all: BTreeMap<Uuid, EntryRecord> = fetched
         .into_iter()
         .filter(|r| vault.verify_record(r).is_ok())
         .map(|r| (r.id, r))
         .collect();
+    report.skipped_unverifiable = fetched_count - remote_all.len();
     let dirty: BTreeMap<Uuid, EntryRecord> = local
         .dirty_entries()?
         .into_iter()
         .map(|r| (r.id, r))
         .collect();
-
-    let mut report = SyncReport::default();
 
     // Pull and merge: reconcile every verified remote record against local.
     for (id, rrec) in &remote_all {
@@ -146,13 +153,45 @@ pub fn sync<L: Storage, R: SyncRemote>(
                 let conflict = resolve_conflict(vault, local, remote, lrec, rrec, now)?;
                 report.conflicts.push(conflict);
             }
-            // Not changed locally: adopt the remote version if it differs.
-            None => {
-                if local.entry(*id)?.as_ref() != Some(rrec) {
+            // Not changed locally: reconcile against the clean local state.
+            None => match local.entry(*id)? {
+                None => {
                     local.apply_synced(rrec)?;
                     report.pulled += 1;
                 }
-            }
+                Some(current) if &current == rrec => {}
+                Some(current) if rrec.modified_ms > current.modified_ms => {
+                    local.apply_synced(rrec)?;
+                    report.pulled += 1;
+                }
+                Some(current) if rrec.modified_ms < current.modified_ms => {
+                    // The server holds an older version of a record this
+                    // device already synced: a server rollback or replay.
+                    // Restore our newer version instead of adopting the old
+                    // one, which would silently revert data everywhere.
+                    match remote.push(&current)? {
+                        PushOutcome::Applied => {
+                            report.pushed += 1;
+                        }
+                        PushOutcome::Rejected(newer) => {
+                            if vault.verify_record(&newer).is_ok() {
+                                let conflict =
+                                    resolve_conflict(vault, local, remote, &current, &newer, now)?;
+                                report.conflicts.push(conflict);
+                            } else {
+                                report.skipped_unverifiable += 1;
+                            }
+                        }
+                    }
+                }
+                Some(current) => {
+                    // Same timestamp, different bytes: a genuine tie between
+                    // two verified versions. Resolve like any conflict, so
+                    // the losing version is preserved, never dropped.
+                    let conflict = resolve_conflict(vault, local, remote, &current, rrec, now)?;
+                    report.conflicts.push(conflict);
+                }
+            },
         }
     }
 
@@ -168,11 +207,13 @@ pub fn sync<L: Storage, R: SyncRemote>(
             }
             // Race: the remote gained this id after our full pull. Only merge
             // a server record the vault key can authenticate; otherwise leave
-            // the edit dirty to retry next sync.
+            // the edit dirty to retry next sync, and say so.
             PushOutcome::Rejected(server_rec) => {
                 if vault.verify_record(&server_rec).is_ok() {
                     let conflict = resolve_conflict(vault, local, remote, lrec, &server_rec, now)?;
                     report.conflicts.push(conflict);
+                } else {
+                    report.skipped_unverifiable += 1;
                 }
             }
         }

@@ -222,6 +222,21 @@ fn sqlite_entry_crud_and_dirty_tracking() {
     assert!(vault.open_entry(&stored).is_err());
 }
 
+/// Conflict-copy ids are stable for the same losing version (idempotent
+/// retries) and distinct for different versions, even with the same entry id
+/// and timestamp.
+#[test]
+fn conflict_copy_ids_are_stable_and_collision_free() {
+    let (vault, _) = Vault::create(&password("master"), test_kdf()).unwrap();
+    let id = new_entry_id().unwrap();
+    let version_a = vault.seal_entry(id, 100, &sample_entry()).unwrap();
+    let version_b = vault.seal_entry(id, 100, &sample_entry()).unwrap();
+
+    use password_manager_core::vault::conflict_copy_id;
+    assert_eq!(conflict_copy_id(&version_a), conflict_copy_id(&version_a));
+    assert_ne!(conflict_copy_id(&version_a), conflict_copy_id(&version_b));
+}
+
 #[test]
 fn tombstone_authentication_detects_forgery() {
     let (vault, _) = Vault::create(&password("master"), test_kdf()).unwrap();
