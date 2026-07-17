@@ -184,7 +184,7 @@ fn load_resources(cfg: &Config) -> Vec<Res> {
 // ---- process lifecycle -----------------------------------------------------
 
 fn start_vault(cfg: &Config, bind: &str) -> Result<()> {
-    if sys::port_listening(VAULT_PORT) {
+    if sys::port_in_use(VAULT_PORT) {
         bail!("something is already listening on port {VAULT_PORT}; run `vaultctl down` first");
     }
     let db = cfg.server_db();
@@ -199,15 +199,17 @@ fn start_vault(cfg: &Config, bind: &str) -> Result<()> {
     ];
     let pid = sys::spawn_detached(&cfg.server_bin(), &args, &[], &cfg.log_file("vault"))?;
     sys::write_pid(&cfg.pid_file("vault"), pid)?;
-    if !sys::wait_listening(VAULT_PORT, 6) {
-        bail!("vault did not come up on {VAULT_PORT}; see `vaultctl logs vault`");
+    // Wait on the actual bind address, which may be the tailnet IP, not
+    // localhost.
+    if !sys::wait_bound(bind, 6) {
+        bail!("vault did not come up on {bind}; see `vaultctl logs vault`");
     }
     println!("  vault up on {bind} (pid {pid})");
     Ok(())
 }
 
 fn start_gate(cfg: &Config) -> Result<()> {
-    if sys::port_listening(GATE_PORT) {
+    if sys::port_in_use(GATE_PORT) {
         bail!("something is already listening on port {GATE_PORT}; run `vaultctl down` first");
     }
     let envs = secrets::load_env(&cfg.oauth_env())?;
@@ -219,7 +221,7 @@ fn start_gate(cfg: &Config) -> Result<()> {
     ];
     let pid = sys::spawn_detached(&cfg.proxy_bin(), &args, &envs, &cfg.log_file("gate"))?;
     sys::write_pid(&cfg.pid_file("gate"), pid)?;
-    if !sys::wait_listening(GATE_PORT, 8) {
+    if !sys::wait_in_use(GATE_PORT, 8) {
         bail!("gate did not come up on {GATE_PORT}; see `vaultctl logs gate`");
     }
     println!("  gate up on {GATE_PORT} (pid {pid})");
@@ -227,19 +229,21 @@ fn start_gate(cfg: &Config) -> Result<()> {
 }
 
 fn stop_service(cfg: &Config, name: &str, port: u16) {
-    let pid = sys::read_pid(&cfg.pid_file(name)).or_else(|| sys::port_owner(port));
-    if pid.is_none() && !sys::port_listening(port) {
+    // Only act when the port is genuinely in use, and kill the process that
+    // actually owns it (a pidfile could be stale and its PID reused by an
+    // unrelated process, which taskkill /T would then wrongly kill).
+    if !sys::port_in_use(port) {
         println!("  {name} not running");
         sys::remove_pid(&cfg.pid_file(name));
         return;
     }
-    if let Some(pid) = pid {
+    if let Some(pid) = sys::port_owner(port).or_else(|| sys::read_pid(&cfg.pid_file(name))) {
         // Ignore taskkill's exit code (it returns 128 when the process is
         // already gone); the port is the real signal.
         let _ = sys::kill(pid);
     }
     let stopped = (0..10).any(|_| {
-        if !sys::port_listening(port) {
+        if !sys::port_in_use(port) {
             return true;
         }
         std::thread::sleep(std::time::Duration::from_millis(150));
@@ -268,8 +272,18 @@ fn cmd_up(cfg: &Config) -> Result<()> {
     }
     println!("bringing the vault up (public, behind the Google gate)...");
     start_vault(cfg, &format!("127.0.0.1:{VAULT_PORT}"))?;
-    start_gate(cfg)?;
-    tscale::funnel_on(cfg, FUNNEL_PORT, &format!("http://127.0.0.1:{GATE_PORT}"))?;
+    // On a later failure, do not leave half a stack running.
+    if let Err(e) = start_gate(cfg) {
+        eprintln!("  gate failed to start; stopping the vault");
+        stop_service(cfg, "vault", VAULT_PORT);
+        return Err(e);
+    }
+    if let Err(e) = tscale::funnel_on(cfg, FUNNEL_PORT, &format!("http://127.0.0.1:{GATE_PORT}")) {
+        eprintln!("  funnel failed; stopping the gate and the vault");
+        stop_service(cfg, "gate", GATE_PORT);
+        stop_service(cfg, "vault", VAULT_PORT);
+        return Err(e);
+    }
     let dns = tscale::dns_name(cfg)?;
     println!("public: https://{dns}:{FUNNEL_PORT}  (Google login, then the vault)");
     Ok(())
@@ -313,7 +327,7 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     println!(
         "  vault     : {}",
         yn(
-            sys::port_listening(VAULT_PORT),
+            sys::port_in_use(VAULT_PORT),
             &format!("up on {VAULT_PORT}"),
             "stopped"
         )
@@ -321,7 +335,7 @@ fn cmd_status(cfg: &Config) -> Result<()> {
     println!(
         "  gate      : {}",
         yn(
-            sys::port_listening(GATE_PORT),
+            sys::port_in_use(GATE_PORT),
             &format!("up on {GATE_PORT}"),
             "stopped"
         )
@@ -358,10 +372,9 @@ fn cmd_status(cfg: &Config) -> Result<()> {
             note
         );
     }
-    if sys::port_listening(FUNNEL_PORT)
-        || tscale::funnel_state(cfg, FUNNEL_PORT)
-            .map(|s| s.on)
-            .unwrap_or(false)
+    if tscale::funnel_state(cfg, FUNNEL_PORT)
+        .map(|s| s.on)
+        .unwrap_or(false)
     {
         println!("  public: https://{dns}:{FUNNEL_PORT}");
     }
@@ -371,7 +384,7 @@ fn cmd_status(cfg: &Config) -> Result<()> {
 fn cmd_funnel(cfg: &Config, action: FunnelAction) -> Result<()> {
     match action {
         FunnelAction::On => {
-            if !sys::port_listening(GATE_PORT) {
+            if !sys::port_in_use(GATE_PORT) {
                 bail!("the gate is not running on {GATE_PORT}; run `vaultctl up` (or start the gate) first");
             }
             tscale::funnel_on(cfg, FUNNEL_PORT, &format!("http://127.0.0.1:{GATE_PORT}"))?;

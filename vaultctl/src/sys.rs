@@ -3,7 +3,7 @@
 
 use anyhow::{Context, Result};
 use std::fs;
-use std::net::{Ipv4Addr, SocketAddr, TcpStream};
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -67,21 +67,43 @@ pub fn remove_pid(path: &Path) {
     let _ = fs::remove_file(path);
 }
 
-/// Is a TCP server listening on 127.0.0.1:port right now?
-pub fn port_listening(port: u16) -> bool {
-    let addr = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
-    TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok()
+/// Is anything listening on this port, on any local address? Uses netstat,
+/// so it sees a tailnet-IP-bound listener, not only 127.0.0.1.
+pub fn port_in_use(port: u16) -> bool {
+    port_owner(port).is_some()
 }
 
-/// Wait up to `secs` for something to start listening on the port.
-pub fn wait_listening(port: u16, secs: u64) -> bool {
-    for _ in 0..(secs * 5) {
-        if port_listening(port) {
+/// Wait up to `secs` for something to be listening on the port (any address).
+pub fn wait_in_use(port: u16, secs: u64) -> bool {
+    (0..(secs * 5)).any(|_| {
+        if port_in_use(port) {
             return true;
         }
         std::thread::sleep(Duration::from_millis(200));
+        false
+    })
+}
+
+/// Wait up to `secs` for a TCP server to accept a connection at `bind` (the
+/// "ip:port" the process was told to bind). Connecting to the actual bind
+/// address confirms readiness even when it is the tailnet IP, not localhost.
+pub fn wait_bound(bind: &str, secs: u64) -> bool {
+    match bind.parse::<SocketAddr>() {
+        Ok(addr) => (0..(secs * 5)).any(|_| {
+            if TcpStream::connect_timeout(&addr, Duration::from_millis(400)).is_ok() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(200));
+            false
+        }),
+        // Unparseable bind: fall back to watching the port via netstat.
+        Err(_) => bind
+            .rsplit(':')
+            .next()
+            .and_then(|p| p.parse::<u16>().ok())
+            .map(|p| wait_in_use(p, secs))
+            .unwrap_or(false),
     }
-    false
 }
 
 /// PID of the process listening on `port`, via `netstat -ano` (Windows).
