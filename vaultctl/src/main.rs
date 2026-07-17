@@ -122,7 +122,11 @@ fn run_menu(cfg: &Config) -> Result<()> {
             }
             "9" => {
                 let w = prompt("  which log (vault/gate)? ");
-                let which = if w.starts_with('g') { Which::Gate } else { Which::Vault };
+                let which = if w.starts_with('g') {
+                    Which::Gate
+                } else {
+                    Which::Vault
+                };
                 cmd_logs(cfg, which)
             }
             "q" | "Q" => return Ok(()),
