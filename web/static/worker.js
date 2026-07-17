@@ -3,7 +3,13 @@
 // master password and the unlocked session never leave this worker; only
 // decrypted display data is posted back.
 
-import init, { Session } from "./pkg/password_manager_web.js";
+// The ?v= query cache-busts the wasm glue and binary together. A worker's
+// module import and init() wasm fetch are not covered by the page's
+// hard-refresh cache bypass, so without this a stale cached .wasm (from an
+// older client) can load against new glue and blow up with
+// "session_seal_entry is not a function". Bump v whenever the wasm changes.
+const WASM_VERSION = "4";
+import init, { Session } from "./pkg/password_manager_web.js?v=4";
 
 let session = null;
 
@@ -12,7 +18,7 @@ self.onmessage = async (event) => {
   try {
     switch (msg.type) {
       case "unlock": {
-        await init();
+        await init(`./pkg/password_manager_web_bg.wasm?v=${WASM_VERSION}`);
         // Drop any previous session before attempting the new one, so a
         // failed unlock can never leave a dangling freed handle behind.
         if (session) {
