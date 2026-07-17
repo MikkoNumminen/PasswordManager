@@ -51,8 +51,11 @@ function callWorker(message) {
 // ---- server API --------------------------------------------------------
 
 async function api(path) {
+  // no-store: these are live, per-request vault reads. Without it the browser
+  // could serve a cached entries list right after a save and hide the change.
   const resp = await fetch(path, {
     headers: { Authorization: `Bearer ${credential}` },
+    cache: "no-store",
   });
   if (!resp.ok) {
     throw new Error(`${path} answered ${resp.status}`);
@@ -78,7 +81,7 @@ function isSafeUrl(value) {
 const TOKEN_KEY = "pm_token";
 // Bumped on every client change; shown in the footer so a stale cached
 // client is immediately recognizable.
-const CLIENT_VERSION = "client v3 (remember-token)";
+const CLIENT_VERSION = "client v4 (add/edit)";
 
 // Some browser modes (private windows, clear-on-close settings) silently
 // drop or block localStorage. Probe it so the page can say so plainly
@@ -138,7 +141,10 @@ async function onAuthed(value) {
   $("auth-status").textContent = "Checking access...";
   let resp;
   try {
-    resp = await fetch("/api/v1/vault", { headers: { Authorization: `Bearer ${value}` } });
+    resp = await fetch("/api/v1/vault", {
+      headers: { Authorization: `Bearer ${value}` },
+      cache: "no-store",
+    });
   } catch (e) {
     // A thrown fetch here is usually not the token at all: an expired Google
     // session makes the gate redirect the request off-origin, which this
