@@ -81,7 +81,7 @@ function isSafeUrl(value) {
 const TOKEN_KEY = "pm_token";
 // Bumped on every client change; shown in the footer so a stale cached
 // client is immediately recognizable.
-const CLIENT_VERSION = "client v6 (edit password)";
+const CLIENT_VERSION = "client v7 (edit password)";
 
 // Some browser modes (private windows, clear-on-close settings) silently
 // drop or block localStorage. Probe it so the page can say so plainly
@@ -406,25 +406,6 @@ async function deleteEntry(entry) {
   }
 }
 
-// Strong password from the browser CSPRNG, uniform over the charset.
-function generatePassword(len = 20) {
-  const charset =
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
-  const limit = 256 - (256 % charset.length);
-  const out = [];
-  while (out.length < len) {
-    const buf = new Uint8Array(len);
-    crypto.getRandomValues(buf);
-    for (const b of buf) {
-      if (b < limit) {
-        out.push(charset[b % charset.length]);
-        if (out.length === len) break;
-      }
-    }
-  }
-  return out.join("");
-}
-
 // ---- wiring ----------------------------------------------------------------
 
 $("unlock-go").addEventListener("click", unlock);
@@ -450,12 +431,6 @@ $("f-password").addEventListener("focus", () => $("f-password").removeAttribute(
 $("f-show").addEventListener("click", () => {
   const f = $("f-password");
   f.type = f.type === "password" ? "text" : "password";
-});
-$("f-gen").addEventListener("click", () => {
-  const f = $("f-password");
-  f.removeAttribute("readonly");
-  f.value = generatePassword();
-  f.type = "text";
 });
 
 boot();
