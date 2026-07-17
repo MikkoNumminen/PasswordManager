@@ -105,7 +105,15 @@ async function unlock() {
   const password = $("master").value;
   if (!password) return;
   $("unlock-status").classList.remove("error");
-  $("unlock-status").textContent = "Deriving key (Argon2id, 64 MiB)...";
+  // Report the parameters the vault actually stores, never a hardcoded guess.
+  let kdfLabel = "Deriving key with Argon2id...";
+  try {
+    const kdf = JSON.parse(metaJson).kdf;
+    kdfLabel = `Deriving key (Argon2id, ${Math.round(kdf.m_cost_kib / 1024)} MiB, ${kdf.t_cost} passes)...`;
+  } catch {
+    // metaJson is server-provided; fall back to the generic label.
+  }
+  $("unlock-status").textContent = kdfLabel;
   // The entries download runs while the worker grinds through the KDF.
   const entriesPromise = api("/api/v1/entries");
   try {
