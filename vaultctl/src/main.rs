@@ -26,7 +26,7 @@ use config::{Config, FUNNEL_PORT, GATE_PORT, VAULT_PORT};
 )]
 struct Cli {
     #[command(subcommand)]
-    command: Cmd,
+    command: Option<Cmd>,
 }
 
 #[derive(Subcommand)]
@@ -71,18 +71,81 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let cfg = Config::load()?;
     match cli.command {
-        Cmd::Up => cmd_up(&cfg),
-        Cmd::Tailnet => cmd_tailnet(&cfg),
-        Cmd::Down => cmd_down(&cfg),
-        Cmd::Status => cmd_status(&cfg),
-        Cmd::Funnel { action } => cmd_funnel(&cfg, action),
-        Cmd::Token => cmd_token(&cfg),
-        Cmd::Doctor => {
+        // No subcommand (e.g. the desktop shortcut): the interactive menu.
+        None => run_menu(&cfg),
+        Some(Cmd::Up) => cmd_up(&cfg),
+        Some(Cmd::Tailnet) => cmd_tailnet(&cfg),
+        Some(Cmd::Down) => cmd_down(&cfg),
+        Some(Cmd::Status) => cmd_status(&cfg),
+        Some(Cmd::Funnel { action }) => cmd_funnel(&cfg, action),
+        Some(Cmd::Token) => cmd_token(&cfg),
+        Some(Cmd::Doctor) => {
             cmd_doctor(&cfg);
             Ok(())
         }
-        Cmd::Logs { which } => cmd_logs(&cfg, which),
+        Some(Cmd::Logs { which }) => cmd_logs(&cfg, which),
     }
+}
+
+// ---- interactive menu ------------------------------------------------------
+
+/// A numbered menu, looping until quit. This is what the desktop shortcut
+/// opens: pick an action by number, no commands to remember.
+fn run_menu(cfg: &Config) -> Result<()> {
+    loop {
+        println!();
+        let _ = cmd_status(cfg);
+        println!();
+        println!("  what do you want to do?");
+        println!("    1) refresh status");
+        println!("    2) go public   (Google gate + funnel 8443)");
+        println!("    3) tailnet only (private, no gate)");
+        println!("    4) stop everything");
+        println!("    5) funnel on");
+        println!("    6) funnel off");
+        println!("    7) rotate API token");
+        println!("    8) doctor (check setup)");
+        println!("    9) view logs");
+        println!("    q) quit");
+        let choice = prompt("  choose: ");
+        let result = match choice.as_str() {
+            "1" | "" => Ok(()),
+            "2" => cmd_up(cfg),
+            "3" => cmd_tailnet(cfg),
+            "4" => cmd_down(cfg),
+            "5" => cmd_funnel(cfg, FunnelAction::On),
+            "6" => cmd_funnel(cfg, FunnelAction::Off),
+            "7" => cmd_token(cfg),
+            "8" => {
+                cmd_doctor(cfg);
+                Ok(())
+            }
+            "9" => {
+                let w = prompt("  which log (vault/gate)? ");
+                let which = if w.starts_with('g') { Which::Gate } else { Which::Vault };
+                cmd_logs(cfg, which)
+            }
+            "q" | "Q" => return Ok(()),
+            other => {
+                println!("  '{other}'? pick a number, or q to quit.");
+                Ok(())
+            }
+        };
+        if let Err(e) = result {
+            println!("  error: {e:#}");
+        }
+        prompt("  [enter to continue] ");
+    }
+}
+
+/// Print a prompt and read one trimmed line from stdin.
+fn prompt(msg: &str) -> String {
+    use std::io::Write;
+    print!("{msg}");
+    let _ = std::io::stdout().flush();
+    let mut s = String::new();
+    let _ = std::io::stdin().read_line(&mut s);
+    s.trim().to_string()
 }
 
 // ---- resource registry (read-only view of the shared node) ----------------
