@@ -27,6 +27,18 @@ worker.onmessage = (event) => {
   else call.reject(new Error(msg.error));
 };
 
+// A worker that fails to load (missing or stale pkg/ build) would otherwise
+// leave every pending call hanging forever with no visible error.
+function failAllPending(reason) {
+  for (const call of pending.values()) {
+    call.reject(new Error(reason));
+  }
+  pending.clear();
+}
+worker.onerror = () =>
+  failAllPending("crypto module failed to load; rebuild web/static/pkg per the README");
+worker.onmessageerror = () => failAllPending("crypto worker message failed");
+
 function callWorker(message) {
   return new Promise((resolve, reject) => {
     const id = nextCallId++;

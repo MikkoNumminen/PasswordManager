@@ -13,7 +13,12 @@ self.onmessage = async (event) => {
     switch (msg.type) {
       case "unlock": {
         await init();
-        if (session) session.free();
+        // Drop any previous session before attempting the new one, so a
+        // failed unlock can never leave a dangling freed handle behind.
+        if (session) {
+          session.free();
+          session = null;
+        }
         session = Session.unlock(msg.metaJson, msg.password);
         self.postMessage({ id: msg.id, ok: true });
         break;
