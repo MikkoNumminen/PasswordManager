@@ -76,8 +76,35 @@ function isSafeUrl(value) {
 // this browser's localStorage so it is entered once per device; the master
 // password is never stored and is required on every unlock.
 const TOKEN_KEY = "pm_token";
+// Bumped on every client change; shown in the footer so a stale cached
+// client is immediately recognizable.
+const CLIENT_VERSION = "client v3 (remember-token)";
+
+// Some browser modes (private windows, clear-on-close settings) silently
+// drop or block localStorage. Probe it so the page can say so plainly
+// instead of appearing to forget the token.
+function storageWorks() {
+  try {
+    localStorage.setItem("pm_probe", "1");
+    const ok = localStorage.getItem("pm_probe") === "1";
+    localStorage.removeItem("pm_probe");
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function authNote(text, isError) {
+  $("auth-status").textContent = text;
+  $("auth-status").classList.toggle("error", !!isError);
+}
 
 function boot() {
+  const ver = document.createElement("p");
+  ver.className = "muted";
+  ver.textContent = CLIENT_VERSION;
+  document.body.appendChild(ver);
+
   $("token-go").addEventListener("click", () => {
     const token = $("token").value.trim();
     if (token) onAuthed(token);
@@ -85,11 +112,23 @@ function boot() {
   $("token").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("token-go").click();
   });
+
+  if (!storageWorks()) {
+    show("token-login");
+    authNote(
+      "This browser is blocking site storage (private window, or a " +
+        "clear-data-on-close setting), so the token cannot be remembered " +
+        "here. It will work, but asks every visit.",
+      true
+    );
+    return;
+  }
   const saved = localStorage.getItem(TOKEN_KEY);
   if (saved) {
     onAuthed(saved); // straight past the token step to the master password
   } else {
     show("token-login");
+    authNote("No saved token on this device yet. Enter it once; after that this step disappears.");
   }
 }
 
@@ -101,8 +140,15 @@ async function onAuthed(value) {
   try {
     resp = await fetch("/api/v1/vault", { headers: { Authorization: `Bearer ${value}` } });
   } catch (e) {
-    $("auth-status").textContent = `Cannot reach the server: ${e.message ?? e}`;
-    $("auth-status").classList.add("error");
+    // A thrown fetch here is usually not the token at all: an expired Google
+    // session makes the gate redirect the request off-origin, which this
+    // page's CSP blocks. A full reload renews the Google session. The saved
+    // token is kept.
+    authNote(
+      `Cannot reach the server (${e.message ?? e}). Reload the page; if your ` +
+        "Google session expired, the reload renews it.",
+      true
+    );
     show("token-login");
     credential = null;
     return;
