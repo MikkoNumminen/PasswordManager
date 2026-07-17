@@ -91,7 +91,11 @@ async function onAuthed(value) {
   try {
     metaJson = await api("/api/v1/vault");
   } catch (e) {
-    $("auth-status").textContent = `No access: ${e.message}`;
+    // 404 means the token worked but no vault has been synced to this server
+    // yet, which is a setup step, not an access failure.
+    $("auth-status").textContent = String(e.message).includes("404")
+      ? "No vault on this server yet. Create one with the CLI and run sync, then reload."
+      : `No access: ${e.message}`;
     $("auth-status").classList.add("error");
     credential = null;
     return;
