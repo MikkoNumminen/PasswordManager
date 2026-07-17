@@ -17,6 +17,8 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
+use tower_http::set_header::SetResponseHeaderLayer;
+
 use password_manager_core::sync::{lww_push_decision, PushDecision};
 use password_manager_core::uuid::Uuid;
 use password_manager_core::{api, EntryRecord, VaultMeta};
@@ -57,7 +59,16 @@ pub fn router(state: Arc<AppState>, web_dir: Option<std::path::PathBuf>) -> Rout
         .route(api::HEALTH, get(|| async { "ok" }))
         .merge(protected);
     if let Some(dir) = web_dir {
-        router = router.fallback_service(tower_http::services::ServeDir::new(dir));
+        // no-cache: the browser may cache the assets but must revalidate on
+        // every load (a cheap 304 when unchanged), so a client update is
+        // picked up immediately instead of a stale app.js lingering.
+        let serve = tower::ServiceBuilder::new()
+            .layer(SetResponseHeaderLayer::overriding(
+                axum::http::header::CACHE_CONTROL,
+                axum::http::HeaderValue::from_static("no-cache"),
+            ))
+            .service(tower_http::services::ServeDir::new(dir));
+        router = router.fallback_service(serve);
     }
     router.with_state(state)
 }

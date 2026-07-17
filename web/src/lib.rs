@@ -15,7 +15,8 @@
 use wasm_bindgen::prelude::*;
 
 use password_manager_core::secrecy::SecretString;
-use password_manager_core::{EntryRecord, Vault, VaultError, VaultMeta};
+use password_manager_core::uuid::Uuid;
+use password_manager_core::{EntryData, EntryRecord, Vault, VaultError, VaultMeta};
 
 /// Stable machine-readable error message for a failed unlock. The page
 /// matches on this exact string instead of parsing prose, so rewording any
@@ -84,5 +85,38 @@ impl Session {
         }
         out.sort_by_key(|e| e.title.to_lowercase());
         serde_json::to_string(&out).map_err(err)
+    }
+
+    /// Encrypt one entry into a record ready to PUT to the server. `data_json`
+    /// carries the entry fields; the sealing (and the vault key) stay here, so
+    /// the server only ever receives ciphertext. Used for both add and edit.
+    ///
+    /// `modified_ms` is f64 so JavaScript can pass a plain Number (from
+    /// Date.now()); millisecond timestamps are well within f64's exact-integer
+    /// range, and this avoids the i64/BigInt wasm boundary at the call site.
+    pub fn seal_entry(
+        &self,
+        id: &str,
+        modified_ms: f64,
+        data_json: &str,
+    ) -> Result<String, JsError> {
+        let id = Uuid::parse_str(id).map_err(err)?;
+        let data: EntryData = serde_json::from_str(data_json).map_err(err)?;
+        let record = self
+            .vault
+            .seal_entry(id, modified_ms as i64, &data)
+            .map_err(err)?;
+        serde_json::to_string(&record).map_err(err)
+    }
+
+    /// Seal a deletion for an entry, ready to PUT to the server. The tombstone
+    /// is authenticated under the vault key, so the server cannot forge it.
+    pub fn seal_tombstone(&self, id: &str, modified_ms: f64) -> Result<String, JsError> {
+        let id = Uuid::parse_str(id).map_err(err)?;
+        let record = self
+            .vault
+            .seal_tombstone(id, modified_ms as i64)
+            .map_err(err)?;
+        serde_json::to_string(&record).map_err(err)
     }
 }

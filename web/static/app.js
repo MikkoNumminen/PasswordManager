@@ -7,6 +7,7 @@
 
 let credential = null; // API token; authorizes ciphertext access only.
 let metaJson = null; // Cleartext vault metadata (salt, KDF params, key check).
+let editingEntry = null; // the decrypted entry being edited, or null when adding
 
 const $ = (id) => document.getElementById(id);
 const show = (id) => $(id).classList.remove("hidden");
@@ -50,8 +51,11 @@ function callWorker(message) {
 // ---- server API --------------------------------------------------------
 
 async function api(path) {
+  // no-store: these are live, per-request vault reads. Without it the browser
+  // could serve a cached entries list right after a save and hide the change.
   const resp = await fetch(path, {
     headers: { Authorization: `Bearer ${credential}` },
+    cache: "no-store",
   });
   if (!resp.ok) {
     throw new Error(`${path} answered ${resp.status}`);
@@ -70,12 +74,40 @@ function isSafeUrl(value) {
   }
 }
 
-// Identity on the public path is enforced by Cloudflare Access at the edge
-// before any request reaches this page or the API. The page itself knows
-// exactly one credential: the API token, which authorizes ciphertext access
-// and has no role in key derivation.
+// The page knows exactly one credential: the API token, which authorizes
+// ciphertext access only (no role in key derivation). It is remembered in
+// this browser's localStorage so it is entered once per device; the master
+// password is never stored and is required on every unlock.
+const TOKEN_KEY = "pm_token";
+// Bumped on every client change; shown in the footer so a stale cached
+// client is immediately recognizable.
+const CLIENT_VERSION = "client v4 (add/edit)";
+
+// Some browser modes (private windows, clear-on-close settings) silently
+// drop or block localStorage. Probe it so the page can say so plainly
+// instead of appearing to forget the token.
+function storageWorks() {
+  try {
+    localStorage.setItem("pm_probe", "1");
+    const ok = localStorage.getItem("pm_probe") === "1";
+    localStorage.removeItem("pm_probe");
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function authNote(text, isError) {
+  $("auth-status").textContent = text;
+  $("auth-status").classList.toggle("error", !!isError);
+}
+
 function boot() {
-  show("token-login");
+  const ver = document.createElement("p");
+  ver.className = "muted";
+  ver.textContent = CLIENT_VERSION;
+  document.body.appendChild(ver);
+
   $("token-go").addEventListener("click", () => {
     const token = $("token").value.trim();
     if (token) onAuthed(token);
@@ -83,23 +115,78 @@ function boot() {
   $("token").addEventListener("keydown", (e) => {
     if (e.key === "Enter") $("token-go").click();
   });
+
+  if (!storageWorks()) {
+    show("token-login");
+    authNote(
+      "This browser is blocking site storage (private window, or a " +
+        "clear-data-on-close setting), so the token cannot be remembered " +
+        "here. It will work, but asks every visit.",
+      true
+    );
+    return;
+  }
+  const saved = localStorage.getItem(TOKEN_KEY);
+  if (saved) {
+    onAuthed(saved); // straight past the token step to the master password
+  } else {
+    show("token-login");
+    authNote("No saved token on this device yet. Enter it once; after that this step disappears.");
+  }
 }
 
 async function onAuthed(value) {
   credential = value;
+  $("auth-status").classList.remove("error");
   $("auth-status").textContent = "Checking access...";
+  let resp;
   try {
-    metaJson = await api("/api/v1/vault");
+    resp = await fetch("/api/v1/vault", {
+      headers: { Authorization: `Bearer ${value}` },
+      cache: "no-store",
+    });
   } catch (e) {
-    // 404 means the token worked but no vault has been synced to this server
-    // yet, which is a setup step, not an access failure.
-    $("auth-status").textContent = String(e.message).includes("404")
-      ? "No vault on this server yet. Create one with the CLI and run sync, then reload."
-      : `No access: ${e.message}`;
-    $("auth-status").classList.add("error");
+    // A thrown fetch here is usually not the token at all: an expired Google
+    // session makes the gate redirect the request off-origin, which this
+    // page's CSP blocks. A full reload renews the Google session. The saved
+    // token is kept.
+    authNote(
+      `Cannot reach the server (${e.message ?? e}). Reload the page; if your ` +
+        "Google session expired, the reload renews it.",
+      true
+    );
+    show("token-login");
     credential = null;
     return;
   }
+  if (resp.status === 401) {
+    // A stale/wrong token: forget it and ask again.
+    localStorage.removeItem(TOKEN_KEY);
+    credential = null;
+    $("token").value = "";
+    show("token-login");
+    $("auth-status").textContent = "Token was rejected. Enter it again.";
+    $("auth-status").classList.add("error");
+    return;
+  }
+  if (resp.status === 404) {
+    // Token is valid, but no vault has been synced to this server yet.
+    localStorage.setItem(TOKEN_KEY, value);
+    show("token-login");
+    $("auth-status").textContent =
+      "No vault on this server yet. Create one with the CLI and run sync, then reload.";
+    $("auth-status").classList.add("error");
+    return;
+  }
+  if (!resp.ok) {
+    $("auth-status").textContent = `No access: ${resp.status}`;
+    $("auth-status").classList.add("error");
+    show("token-login");
+    credential = null;
+    return;
+  }
+  metaJson = await resp.text();
+  localStorage.setItem(TOKEN_KEY, value); // remember for next visit
   hide("auth");
   show("unlock");
   $("master").focus();
@@ -138,6 +225,31 @@ async function unlock() {
   }
 }
 
+// A small "did it" button that reverts its label after a moment.
+function flashButton(btn, done) {
+  const label = btn.textContent;
+  btn.textContent = done;
+  setTimeout(() => (btn.textContent = label), 1200);
+}
+
+async function copyText(btn, text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    flashButton(btn, "copied");
+  } catch {
+    flashButton(btn, "no clipboard");
+  }
+}
+
+function actionButton(label, cls, onClick) {
+  const b = document.createElement("button");
+  b.className = cls;
+  b.type = "button";
+  b.textContent = label;
+  b.addEventListener("click", onClick);
+  return b;
+}
+
 function render(entries) {
   const tbody = $("entries");
   tbody.replaceChildren();
@@ -169,29 +281,139 @@ function render(entries) {
     }
 
     const actions = document.createElement("td");
-    const reveal = document.createElement("button");
-    reveal.className = "small";
-    reveal.textContent = "Reveal";
-    reveal.addEventListener("click", () => {
+    actions.className = "row-actions";
+    const reveal = actionButton("reveal", "small", () => {
       const hidden = pass.dataset.revealed === "no";
       pass.textContent = hidden ? entry.password : "••••••";
       pass.dataset.revealed = hidden ? "yes" : "no";
-      reveal.textContent = hidden ? "Hide" : "Reveal";
+      reveal.textContent = hidden ? "hide" : "reveal";
     });
-    const copy = document.createElement("button");
-    copy.className = "small";
-    copy.textContent = "Copy";
-    copy.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(entry.password);
-      copy.textContent = "Copied";
-      setTimeout(() => (copy.textContent = "Copy"), 1500);
-    });
-    actions.append(reveal, " ", copy);
+    const copyPass = actionButton("copy pw", "small", (e) => copyText(e.target, entry.password));
+    const copyUser = actionButton("copy user", "small", (e) => copyText(e.target, entry.username));
+    const edit = actionButton("edit", "small", () => openEditor(entry));
+    const del = actionButton("delete", "small danger", () => deleteEntry(entry));
+    actions.append(reveal, " ", copyPass, " ", copyUser, " ", edit, " ", del);
 
     row.append(title, user, pass, url, actions);
     tbody.appendChild(row);
   }
 }
+
+// ---- add / edit / delete ---------------------------------------------------
+
+// Re-fetch every record and re-render. Called after any write so the view
+// always reflects what the server actually holds.
+async function refresh() {
+  const recordsJson = await api("/api/v1/entries");
+  render(JSON.parse(await callWorker({ type: "decrypt", recordsJson })));
+}
+
+function openEditor(entry) {
+  editingEntry = entry || null;
+  $("editor-title").textContent = entry ? "Edit entry" : "Add entry";
+  $("f-title").value = entry ? entry.title : "";
+  $("f-username").value = entry ? entry.username : "";
+  $("f-password").value = entry ? entry.password : "";
+  $("f-password").type = "password";
+  $("f-url").value = entry ? entry.url : "";
+  $("f-notes").value = entry ? entry.notes : "";
+  $("editor-status").textContent = "";
+  $("editor-status").classList.remove("error");
+  hide("vault");
+  show("editor");
+  $("f-title").focus();
+}
+
+function closeEditor() {
+  editingEntry = null;
+  hide("editor");
+  show("vault");
+}
+
+async function putRecord(entryId, recordJson) {
+  const resp = await fetch(`/api/v1/entries/${entryId}`, {
+    method: "PUT",
+    headers: { Authorization: `Bearer ${credential}`, "Content-Type": "application/json" },
+    body: recordJson,
+  });
+  if (resp.status === 409) {
+    throw new Error("this entry changed on the server; lock, reopen, and try again");
+  }
+  if (!resp.ok) {
+    throw new Error(`save failed (${resp.status})`);
+  }
+}
+
+async function saveEntry() {
+  const title = $("f-title").value.trim();
+  if (!title) {
+    $("editor-status").textContent = "a title is required";
+    $("editor-status").classList.add("error");
+    return;
+  }
+  const entryId = editingEntry ? editingEntry.id : crypto.randomUUID();
+  const createdMs = editingEntry ? editingEntry.created_ms : Date.now();
+  // The timestamp must strictly increase per entry for last-write-wins sync.
+  const prev = editingEntry ? editingEntry.modified_ms : 0;
+  const modifiedMs = Math.max(Date.now(), prev + 1);
+  const data = {
+    title,
+    username: $("f-username").value,
+    password: $("f-password").value,
+    url: $("f-url").value,
+    notes: $("f-notes").value,
+    created_ms: createdMs,
+  };
+  $("editor-status").textContent = "saving...";
+  $("editor-status").classList.remove("error");
+  try {
+    const recordJson = await callWorker({
+      type: "seal",
+      entryId,
+      modifiedMs,
+      dataJson: JSON.stringify(data),
+    });
+    await putRecord(entryId, recordJson);
+    closeEditor();
+    await refresh();
+  } catch (e) {
+    $("editor-status").textContent = `could not save: ${e.message ?? e}`;
+    $("editor-status").classList.add("error");
+  }
+}
+
+async function deleteEntry(entry) {
+  if (!confirm(`Delete "${entry.title}"?`)) return;
+  const modifiedMs = Math.max(Date.now(), entry.modified_ms + 1);
+  try {
+    const recordJson = await callWorker({ type: "tombstone", entryId: entry.id, modifiedMs });
+    await putRecord(entry.id, recordJson);
+    await refresh();
+  } catch (e) {
+    alert(`could not delete: ${e.message ?? e}`);
+  }
+}
+
+// Strong password from the browser CSPRNG, uniform over the charset.
+function generatePassword(len = 20) {
+  const charset =
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!@#$%^&*()-_=+";
+  const limit = 256 - (256 % charset.length);
+  const out = [];
+  while (out.length < len) {
+    const buf = new Uint8Array(len);
+    crypto.getRandomValues(buf);
+    for (const b of buf) {
+      if (b < limit) {
+        out.push(charset[b % charset.length]);
+        if (out.length === len) break;
+      }
+    }
+  }
+  return out.join("");
+}
+
+// ---- wiring ----------------------------------------------------------------
 
 $("unlock-go").addEventListener("click", unlock);
 $("master").addEventListener("keydown", (e) => {
@@ -203,6 +425,21 @@ $("lock").addEventListener("click", async () => {
   } finally {
     location.reload();
   }
+});
+$("forget-token").addEventListener("click", () => {
+  localStorage.removeItem(TOKEN_KEY);
+  location.reload();
+});
+$("add").addEventListener("click", () => openEditor(null));
+$("editor-save").addEventListener("click", saveEntry);
+$("editor-cancel").addEventListener("click", closeEditor);
+$("f-show").addEventListener("click", () => {
+  const f = $("f-password");
+  f.type = f.type === "password" ? "text" : "password";
+});
+$("f-gen").addEventListener("click", () => {
+  $("f-password").value = generatePassword();
+  $("f-password").type = "text";
 });
 
 boot();
