@@ -29,6 +29,18 @@ self.onmessage = async (event) => {
         self.postMessage({ id: msg.id, ok: true, result: json });
         break;
       }
+      case "seal": {
+        if (!session) throw new Error("locked");
+        const record = session.seal_entry(msg.entryId, msg.modifiedMs, msg.dataJson);
+        self.postMessage({ id: msg.id, ok: true, result: record });
+        break;
+      }
+      case "tombstone": {
+        if (!session) throw new Error("locked");
+        const record = session.seal_tombstone(msg.entryId, msg.modifiedMs);
+        self.postMessage({ id: msg.id, ok: true, result: record });
+        break;
+      }
       case "lock": {
         if (session) session.free();
         session = null;

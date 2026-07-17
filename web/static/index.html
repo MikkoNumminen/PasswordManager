@@ -26,6 +26,12 @@
   button { background: #2f6feb; color: white; border: 0; border-radius: 4px;
            padding: 0.5rem 1rem; font-size: 0.95rem; cursor: pointer; }
   button.small { padding: 0.2rem 0.6rem; font-size: 0.8rem; background: #3a4150; }
+  button.danger { background: #7a2f2f; }
+  .row-actions { white-space: nowrap; }
+  .bar { display: flex; gap: 0.5rem; margin-bottom: 0.75rem; }
+  label { display: block; color: #9aa4b2; font-size: 0.85rem; margin-top: 0.5rem; }
+  .field-row { display: flex; gap: 0.5rem; align-items: center; }
+  .field-row input { margin-bottom: 0; }
   table { width: 100%; border-collapse: collapse; }
   th, td { text-align: left; padding: 0.45rem 0.5rem; border-bottom: 1px solid #2c313a;
            font-size: 0.92rem; word-break: break-all; }
@@ -63,11 +69,37 @@ the server only ever sees ciphertext.</p>
 </div>
 
 <div id="vault" class="card hidden">
-  <button id="lock">Lock</button>
+  <div class="bar">
+    <button id="add">+ Add entry</button>
+    <button id="lock" class="small">Lock</button>
+  </div>
   <table>
     <thead><tr><th>Title</th><th>Username</th><th>Password</th><th>URL</th><th></th></tr></thead>
     <tbody id="entries"></tbody>
   </table>
+</div>
+
+<div id="editor" class="card hidden">
+  <h2 id="editor-title" style="font-size:1.1rem;margin-top:0"></h2>
+  <label for="f-title">Title</label>
+  <input id="f-title" autocomplete="off">
+  <label for="f-username">Username</label>
+  <input id="f-username" autocomplete="off">
+  <label for="f-password">Password</label>
+  <div class="field-row">
+    <input type="password" id="f-password" autocomplete="off">
+    <button id="f-show" class="small" type="button">show</button>
+    <button id="f-gen" class="small" type="button">generate</button>
+  </div>
+  <label for="f-url">URL</label>
+  <input id="f-url" autocomplete="off">
+  <label for="f-notes">Notes</label>
+  <input id="f-notes" autocomplete="off">
+  <div class="bar" style="margin-top:0.75rem">
+    <button id="editor-save">Save</button>
+    <button id="editor-cancel" class="small" type="button">Cancel</button>
+  </div>
+  <p id="editor-status" class="muted"></p>
 </div>
 
 <script type="module" src="./app.js"></script>
