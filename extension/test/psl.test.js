@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parsePsl, registrableDomain, matchLevel } from "../src/psl.js";
+import { parsePsl, registrableDomain, matchLevel, hostOf } from "../src/psl.js";
 
 // A small slice of the real Public Suffix List: a plain TLD, a multi-label
 // suffix, a private suffix, and a wildcard with an exception.
@@ -64,4 +64,17 @@ test("IP hosts match only themselves", () => {
   assert.equal(ml("192.168.1.10", "192.168.1.10"), "exact");
   assert.equal(ml("192.168.1.10", "192.168.1.11"), "none");
   assert.equal(ml("192.168.1.10", "example.com"), "none");
+});
+
+test("hostOf recovers the host of scheme-less and full URLs", () => {
+  assert.equal(hostOf("https://www.example.com/login"), "www.example.com");
+  assert.equal(hostOf("example.com"), "example.com"); // bare host, no scheme
+  assert.equal(hostOf("example.com/path"), "example.com");
+  assert.equal(hostOf("sub.example.co.uk"), "sub.example.co.uk");
+  assert.equal(hostOf(""), "");
+  assert.equal(hostOf("mailto:a@b.com"), ""); // has a scheme, no host
+  // A bare host stored on an entry now matches a real tab URL for that host.
+  assert.equal(ml("example.com", hostOf("example.com")), "exact");
+  // Leniency does not create a false match for a lookalike entry.
+  assert.equal(ml("example.com", hostOf("evil-example.com")), "none");
 });

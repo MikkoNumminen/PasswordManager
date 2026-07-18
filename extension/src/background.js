@@ -46,8 +46,21 @@ async function sess() {
   return chrome.storage.session.get(["vaultKey", "metaJson", "index", "records"]);
 }
 
+// Free the wasm Session so core's Drop runs and the vault key is zeroized now,
+// rather than whenever GC eventually reclaims the handle.
+function freeLive() {
+  if (liveSession) {
+    try {
+      liveSession.free();
+    } catch {
+      // already freed
+    }
+    liveSession = null;
+  }
+}
+
 async function lock() {
-  liveSession = null;
+  freeLive();
   await chrome.storage.session.remove(["vaultKey", "metaJson", "index", "records"]);
   await chrome.alarms.clear(AUTOLOCK_ALARM);
 }
@@ -126,6 +139,7 @@ async function doUnlock(password) {
   const index = JSON.parse(session.decrypt_index(recordsJson));
   const keyBytes = Array.from(session.export_key());
 
+  freeLive(); // drop any prior session before replacing it
   liveSession = session;
   await chrome.storage.session.set({
     vaultKey: keyBytes,
@@ -176,9 +190,21 @@ function injectedFill(username, password) {
   return { filledUser, filledPass, foundPassword: !!pwField };
 }
 
-async function doFill({ id, tabId, tabHost, confirmedMismatch }) {
+async function doFill({ id, tabId, confirmedMismatch }) {
   const entry = await decryptOne(id);
   if (!entry) return { error: "locked" };
+  // Derive the target host from the tab we are about to fill, not from what the
+  // popup passed. The popup reads the host when it opens; if the tab navigates
+  // afterward (same tab id, new URL), a stale host could pass the domain check
+  // while the password is injected into the navigated page. Checking and
+  // filling the same tab.url closes that gap.
+  let tabHost = "";
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    tabHost = hostOf(tab?.url || "");
+  } catch {
+    return { error: "cannot read the target tab" };
+  }
   const ruleset = await loadRuleset();
   const level = matchLevel(tabHost, hostOf(entry.url), ruleset);
   if (level === "none" && !confirmedMismatch) {

@@ -54,7 +54,10 @@ Exact host match ranks first, same-registrable-domain (subdomain) match
 second, everything else is not a match. Picking an entry whose domain does
 not match the current tab shows an explicit warning and requires a second
 confirmation, and the service worker re-checks the match and refuses a
-cross-domain fill unless that confirmation flag is set. The PSL is bundled
+cross-domain fill unless that confirmation flag is set. The worker derives the
+tab's host from the tab it is about to fill, not from what the popup passed, so
+a tab that navigates after the popup opens cannot pass the check with a stale
+host and receive the fill anyway. The PSL is bundled
 (the extension may only connect to the configured server origin, so it cannot
 fetch the list at runtime).
 

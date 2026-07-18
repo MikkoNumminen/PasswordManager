@@ -89,13 +89,24 @@ export function matchLevel(tabHost, entryHost, ruleset) {
   return t === e ? "exact" : "subdomain";
 }
 
-// The host of a URL string, or "" if it does not parse.
+// The host of a URL string, or "" if it does not parse. Entries are sometimes
+// stored with a bare host and no scheme ("example.com"); retry with an https
+// scheme so those still match. Tab URLs from the browser always carry a scheme,
+// so this leniency cannot turn a non-match into a match: it only recovers the
+// host of an entry's own stored URL.
 export function hostOf(url) {
-  try {
-    return new URL(url).hostname;
-  } catch {
-    return "";
-  }
+  const parse = (u) => {
+    try {
+      return new URL(u).hostname;
+    } catch {
+      return "";
+    }
+  };
+  if (!url) return "";
+  const direct = parse(url);
+  if (direct) return direct;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(url)) return ""; // had a scheme; genuinely unparseable
+  return parse("https://" + url);
 }
 
 // Browser-only: load and cache the bundled PSL.
