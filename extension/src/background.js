@@ -18,6 +18,8 @@ const LOCAL = "local"; // chrome.storage.local: server config
 const SESSION = "session"; // chrome.storage.session: key, meta, index, records
 const AUTOLOCK_ALARM = "autolock";
 const CLIPBOARD_ALARM = "clipboard-clear";
+const UPDATE_ALARM = "update-check";
+const UPDATE_PERIOD_MINUTES = 360; // re-check the server for a newer build every 6h
 
 let wasmReady = null;
 let liveSession = null; // in-memory Session for this worker's lifetime
@@ -30,9 +32,18 @@ async function ensureWasm() {
 }
 
 // Restrict session storage to trusted extension contexts (not content scripts).
+// Also arm the periodic update check and run one now, so the toolbar badge
+// reflects an available update without waiting for the popup to be opened.
 chrome.runtime.onInstalled.addListener(() => {
   chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }).catch(() => {});
+  armUpdateCheck();
 });
+chrome.runtime.onStartup.addListener(armUpdateCheck);
+
+function armUpdateCheck() {
+  chrome.alarms.create(UPDATE_ALARM, { periodInMinutes: UPDATE_PERIOD_MINUTES });
+  refreshUpdateBadge();
+}
 
 // ---- config & session storage ---------------------------------------------
 
@@ -146,6 +157,24 @@ async function checkUpdate() {
   }
 }
 
+// Flag an available update on the toolbar icon so it is visible on every tab
+// without opening the popup. A subtle amber dot plus a tooltip; cleared when
+// the installed build is current. Best-effort: a failed check never nags.
+async function refreshUpdateBadge() {
+  const r = await checkUpdate();
+  if (r.behind) {
+    chrome.action.setBadgeText({ text: "↑" }); // an up arrow
+    chrome.action.setBadgeBackgroundColor({ color: "#d29922" }); // amber
+    chrome.action.setTitle({
+      title: `PasswordManager — update available (v${r.latest}; you have v${r.current})`,
+    });
+  } else {
+    chrome.action.setBadgeText({ text: "" });
+    chrome.action.setTitle({ title: "PasswordManager" });
+  }
+  return r;
+}
+
 async function doUnlock(password) {
   await ensureWasm();
   const metaResp = await api("/api/v1/vault");
@@ -173,6 +202,7 @@ async function doUnlock(password) {
   }
   await armAutoLock();
   broadcastUnlocked();
+  refreshUpdateBadge(); // a good moment to refresh the flag
   return { ok: true };
 }
 
@@ -477,6 +507,7 @@ async function neverForSite(cs, offerId) {
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === AUTOLOCK_ALARM) lock();
   else if (alarm.name === CLIPBOARD_ALARM) clearClipboardIfUnchanged();
+  else if (alarm.name === UPDATE_ALARM) refreshUpdateBadge();
 });
 
 // ---- message router --------------------------------------------------------
@@ -518,7 +549,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await lock();
           return { ok: true };
         case "checkUpdate":
-          return await checkUpdate();
+          return await refreshUpdateBadge();
         case "cs.getMatches":
           return await doGetMatches(cs);
         case "cs.fill":
