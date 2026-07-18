@@ -102,6 +102,12 @@
     if (!(el instanceof HTMLInputElement)) return;
     const form = formOfElement(el);
     if (!form) return;
+    // Resolve the element refs now, before any await: a MutationObserver
+    // rescan during the getMatches round-trip can rebuild the index arrays,
+    // and stale indexes would misdirect the fill. Element refs stay valid
+    // across a rescan; the indexes do not.
+    const userEl = form.usernameIdx != null ? elements[form.usernameIdx] : null;
+    const pwEl = elements[form.passwordIdx];
     const res = await send({ type: "cs.getMatches" });
     if (res.disabled) {
       dormant = true;
@@ -112,11 +118,6 @@
       return;
     }
     if (!res.matches || !res.matches.length) return;
-    // Resolve the elements now: a MutationObserver rescan while the dropdown
-    // is open rebuilds the index arrays, and stale indexes could point the
-    // fill at the wrong field. Element references stay correct regardless.
-    const userEl = form.usernameIdx != null ? elements[form.usernameIdx] : null;
-    const pwEl = elements[form.passwordIdx];
     ns.dropdown.open({
       anchor: el,
       items: res.matches,

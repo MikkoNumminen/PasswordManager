@@ -72,10 +72,14 @@
         button("×", "close", () => callbacks.onDismiss?.())
       );
     } else if (state === "authRequired") {
-      msg.append("Sign in to the vault server first, then save.");
+      msg.append("Sign in to the vault server, then Save.");
+      // Keep Save reachable: after signing in on the server tab, the user
+      // comes back here and retries. The captured credential is held until
+      // the save succeeds (subject to its short expiry).
       bar.append(
         msg,
         button("Sign in", "primary", () => callbacks.onSignIn?.()),
+        button("Save", "", () => callbacks.onSave?.()),
         button("×", "close", () => callbacks.onDismiss?.())
       );
     } else if (state === "saving") {
