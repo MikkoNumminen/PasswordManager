@@ -13,6 +13,11 @@
 
 set -u
 
+# Byte collation everywhere: sort order and ERE ranges must not depend on the
+# caller's locale, or the "deterministic output" promise breaks across
+# machines (empty LANG here, C.UTF-8 on CI runners, en_US.UTF-8 elsewhere).
+export LC_ALL=C
+
 # --- workspace root ---------------------------------------------------------
 
 repo_root() {
@@ -69,10 +74,19 @@ fi
 # First line number in FILE matching ERE; empty when absent.
 first_line() { scan "$1" "$2" | head -n1 | cut -d: -f1; }
 
-# Like scan, but drops everything at/after the file's first #[cfg(test)] so
-# inline test modules (known-answer vectors, fixtures) are excluded.
+# Line number of the '#[cfg(test)]' that opens the file's inline test module
+# (i.e. is directly followed by a `mod` line); empty if none. Deliberately
+# NOT the first #[cfg(test)] anywhere: a cfg-gated import or a comment near
+# the top of a file must not blind the scan to all real code below it.
+test_mod_line() {
+  awk '/#\[cfg\(test\)\]/ { n = NR; getline
+         if ($0 ~ /^[[:space:]]*(pub[[:space:]]+)?mod[[:space:]]/) { print n; exit } }' "$1"
+}
+
+# Like scan, but drops everything at/after the file's inline test module so
+# known-answer vectors and fixtures are excluded.
 scan_code() {
-  cut_at=$(first_line "$1" '#\[cfg\(test\)\]')
+  cut_at=$(test_mod_line "$1")
   if [ -n "$cut_at" ]; then
     scan "$1" "$2" | awk -F: -v c="$cut_at" '($1+0) < (c+0)'
   else
@@ -80,8 +94,26 @@ scan_code() {
   fi
 }
 
-# Print lines A..B of FILE (read-only window for context checks).
-window() { sed -n "${2},${3}p" "$1" | tr -d '\r'; }
+# Print lines A..B of FILE (read-only window for context checks). Addresses
+# are sanitized: non-numeric or empty yields no output instead of sed errors,
+# and out-of-order/zero addresses are clamped, so callers can pass raw
+# first_line results without guarding.
+window() {
+  case "$2" in ''|*[!0-9]*) return 0 ;; esac
+  case "$3" in ''|*[!0-9]*) return 0 ;; esac
+  ws=$2; we=$3
+  [ "$ws" -lt 1 ] && ws=1
+  [ "$we" -lt "$ws" ] && we=$ws
+  sed -n "${ws},${we}p" "$1" | tr -d '\r'
+}
+
+# max(1, A-B): for building "N lines back" addresses and REVIEW ranges that
+# can never go to zero or negative near the top of a file.
+back() {
+  br=$(( $1 - $2 ))
+  [ "$br" -lt 1 ] && br=1
+  printf '%s' "$br"
+}
 
 # --- output -----------------------------------------------------------------
 

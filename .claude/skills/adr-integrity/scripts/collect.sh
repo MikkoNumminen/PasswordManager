@@ -44,10 +44,17 @@ main() {
     fi
   done
 
-  # All references, from every tracked text file: 'ADR 0009' prose form and
-  # 'docs/adr/0009-...' path form. Self-references do not count.
-  refs=$(tracked '\.(md|rs|js|mjs|ts|toml|yml|ps1|cfg|json|html)$' | while read -r f; do
-    scan_o "$f" 'ADR [0-9]{4}|docs/adr/[0-9]{4}' | sed -E "s|^([0-9]+):.*([0-9]{4})\$|$f:\1:\2|"
+  # All references, from every tracked text file EXCEPT the audit skills
+  # themselves (.claude/): the auditor's own docs must never create or
+  # sustain reference evidence (self-certification) or flag their own format
+  # examples. Handles the prose form 'ADR 0009', the list form
+  # 'ADR 0002, 0003', and the path form 'docs/adr/0009-...'; every 4-digit
+  # group inside a match is one reference.
+  refs=$(tracked '\.(md|rs|js|mjs|ts|toml|yml|ps1|cfg|json|html)$' | grep -v '^\.claude/' | while read -r f; do
+    scan_o "$f" 'ADR [0-9]{4}(, *[0-9]{4})*|docs/adr/[0-9]{4}' \
+      | awk -F: -v f="$f" '{ ln=$1; s=$0; sub(/^[0-9]+:/, "", s)
+          while (match(s, /[0-9][0-9][0-9][0-9]/)) {
+            print f ":" ln ":" substr(s, RSTART, 4); s = substr(s, RSTART+4) } }'
   done)
 
   # ai-ref: every referenced number must exist.
@@ -64,7 +71,7 @@ main() {
     cnt=$(printf '%s\n' "$refs" | awk -F: -v n="$n" -v self="docs/adr/$n" \
       'index($1, self) != 1 && $3 == n' | wc -l | tr -d ' ')
     if [ "$cnt" -gt 0 ]; then
-      ok ai-ref "ADR $n referenced ${cnt}x outside its own file"
+      ok ai-orphan "ADR $n referenced ${cnt}x outside its own file"
     else
       finding ai-orphan low "docs/adr:0" "ADR $n is referenced by nothing (dead decision record?)"
     fi

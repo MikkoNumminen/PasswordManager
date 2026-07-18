@@ -8,8 +8,11 @@
 #   za-entrydata   the decrypted entry type zeroizes on drop
 #   za-export      key material returned by value in an unwrapped type
 #   za-pwfield     password-holding String fields without a zeroize derive
+#   za-skip        #[zeroize(skip)] excluding a secret-named field from wiping
 #   za-copy        expose_secret() copied into an unmanaged String
 #   za-rawfield    key/secret-named raw byte fields
+#   za-keybuf      derive_key's raw key buffer custody (zeroize on error,
+#                  move into VaultKey on success)
 set -u
 here=$(cd "$(dirname "$0")" && pwd)
 . "$here/../../_shared/lib.sh"
@@ -46,7 +49,7 @@ main() {
 
   # za-entrydata -------------------------------------------------------------
   dl=$(first_line "$MODEL_RS" 'struct EntryData')
-  der=$(window "$MODEL_RS" $((dl-2)) "$dl")
+  der=$(window "$MODEL_RS" "$(back "${dl:-0}" 2)" "$dl")
   if printf '%s' "$der" | grep -q 'ZeroizeOnDrop'; then
     ok za-entrydata "EntryData derives Zeroize + ZeroizeOnDrop ($MODEL_RS:$dl)"
   else
@@ -58,10 +61,16 @@ main() {
   # for exactly one client (the extension's chrome.storage.session custody,
   # documented in core::vault) but they ARE unwrapped key bytes; kept visible
   # as medium findings so new callers or new escapes cannot appear silently.
+  # Candidate fns are found by name, then the signature is JOINED across up
+  # to four lines before testing the return type, so a rustfmt-wrapped
+  # signature cannot hide the escape. References (&[u8...]) are borrows, not
+  # escapes, and do not match.
   rust_nontest | while read -r f; do
-    scan_code "$f" 'fn [a-z_]*(export|key)[a-z_]*\(.*-> *(Vec<u8>|\[u8)' | while IFS=: read -r ln txt; do
+    scan_code "$f" 'fn [a-z_]*(export|key|byte)[a-z_]*\(' | while IFS=: read -r ln txt; do
       [ -n "$ln" ] || continue
-      printf '%s' "$txt" | grep -Eq 'key_check|token_hash' && continue
+      sig=$(window "$f" "$ln" $((ln+3)) | tr -d '\n')
+      printf '%s' "$sig" | grep -Eq -- '-> *(Vec<u8>|Box<\[u8|\[u8;|String)' || continue
+      printf '%s' "$sig" | grep -Eq 'key_check|token_hash' && continue
       finding za-export medium "$f:$ln" "returns raw key material by value: $(printf '%s' "$txt" | sed 's/^ *//')"
     done
   done
@@ -75,13 +84,35 @@ main() {
       # Look back up to 12 lines for the struct's derive attribute.
       start=$((ln > 14 ? ln - 14 : 1))
       ctx=$(window "$f" "$start" "$ln")
-      if printf '%s' "$ctx" | grep -q 'ZeroizeOnDrop'; then
+      if window "$f" "$(back "$ln" 2)" "$ln" | grep -q 'zeroize *( *skip *)'; then
+        finding za-pwfield high "$f:$ln" "password field carries #[zeroize(skip)]: excluded from wiping inside a ZeroizeOnDrop struct"
+      elif printf '%s' "$ctx" | grep -q 'ZeroizeOnDrop'; then
         ok za-pwfield "$f:$ln password String lives in a ZeroizeOnDrop struct"
       else
         finding za-pwfield low "$f:$ln" "password: String in a struct without ZeroizeOnDrop (unzeroized copy on drop)"
       fi
     done
   done
+
+  # za-skip ------------------------------------------------------------------
+  # #[zeroize(skip)] anywhere: fine on non-secret fields, a broken promise on
+  # secret-named ones (the derive stays, the wiping silently stops).
+  skips=$(rust_nontest | while read -r f; do
+    scan_code "$f" 'zeroize *\( *skip *\)' | sed "s|^|$f:|"
+  done)
+  if [ -z "$skips" ]; then
+    ok za-skip "no #[zeroize(skip)] attributes in non-test Rust code"
+  else
+    printf '%s\n' "$skips" | while IFS=: read -r f ln txt; do
+      [ -n "$ln" ] || continue
+      fieldline=$(window "$f" $((ln+1)) $((ln+2)) | grep -Ev '^[[:space:]]*(#|//)' | head -n1 | sed 's/^ *//')
+      if printf '%s' "$fieldline" | grep -Eqi 'password|passwd|secret|plaintext|key'; then
+        finding za-skip high "$f:$ln" "#[zeroize(skip)] on a secret-named field: $fieldline"
+      else
+        ok za-skip "$f:$ln #[zeroize(skip)] on a non-secret field: $fieldline"
+      fi
+    done
+  fi
 
   # za-copy ------------------------------------------------------------------
   # expose_secret() copied into a plain String. OK when the copy demonstrably
@@ -119,16 +150,20 @@ main() {
     done
   done
 
-  # The raw key buffer inside derive_key: freed into VaultKey or zeroized on
-  # the error path.
+  # za-keybuf ----------------------------------------------------------------
+  # The raw key buffer inside derive_key: zeroized on the error path and
+  # moved into VaultKey on success. Its own check-id: a hit here is a broken
+  # zeroize path in key derivation, not a mis-named struct field.
   ln=$(first_line "$CRYPTO_RS" 'let mut key = Box::new\(\[0u8; KEY_LEN\]\)')
   if [ -n "$ln" ]; then
     ctx=$(window "$CRYPTO_RS" "$ln" $((ln+7)))
     if printf '%s' "$ctx" | grep -q 'zeroize' && printf '%s' "$ctx" | grep -q 'VaultKey::from_bytes'; then
-      ok za-rawfield "derive_key's raw buffer is zeroized on error and moved into VaultKey on success ($CRYPTO_RS:$ln)"
+      ok za-keybuf "derive_key's raw buffer is zeroized on error and moved into VaultKey on success ($CRYPTO_RS:$ln)"
     else
-      finding za-rawfield medium "$CRYPTO_RS:$ln" "derive_key's raw key buffer custody changed; verify zeroize on every path"
+      finding za-keybuf high "$CRYPTO_RS:$ln" "derive_key's raw key buffer custody changed; verify zeroize on every path"
     fi
+  else
+    finding za-keybuf medium "$CRYPTO_RS:0" "derive_key's raw key buffer anchor not found; the custody check lost its target"
   fi
 }
 

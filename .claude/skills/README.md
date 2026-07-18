@@ -34,7 +34,7 @@ roughly 2-25 s per collector, about a minute for all six.
 | `crypto-boundary` | Crypto crates and direct `use` only in `core`; no hand-rolled xor loops; no non-constant-time secret comparison | cb-deps, cb-use, cb-xor, cb-cmp |
 | `claims-vs-code` | Argon2id params, AEAD name, nonce length, wasm-bindgen pin, default bind — README/ADR values vs the actual constants | cv-kdf-*, cv-aead, cv-nonce, cv-wbg, cv-bind |
 | `secret-hygiene` | Committed secrets in tree and git history, .gitignore coverage, long base64/hex literals outside test vectors, log/print/panic statements touching secret words | sh-tracked, sh-names, sh-ignore, sh-literals, sh-log, sh-history |
-| `zeroize-audit` | Key/plaintext custody: SecretBox/Zeroizing/ZeroizeOnDrop wrappers, unwrapped key material returned by value, secret copies into plain Strings | za-key-wrap, za-derive, za-decrypt, za-entrydata, za-export, za-pwfield, za-copy, za-rawfield |
+| `zeroize-audit` | Key/plaintext custody: SecretBox/Zeroizing/ZeroizeOnDrop wrappers, unwrapped key material returned by value, `#[zeroize(skip)]` on secret fields, secret copies into plain Strings, derive_key buffer custody | za-key-wrap, za-derive, za-decrypt, za-entrydata, za-export, za-pwfield, za-skip, za-copy, za-rawfield, za-keybuf |
 | `adr-integrity` | Every ADR numbered/titled/statused; superseded ADRs name successors; references resolve; no orphans | ai-index, ai-status, ai-super, ai-ref, ai-orphan |
 | `sync-invariants` | AAD binds uuid+modified_ms at every AEAD site; conflict losers persisted before winners apply; pulled records verified before storage; server delegates to core's LWW rule | si-aad, si-aead, si-callers, si-conflict, si-pull, si-server |
 | `audit-all` | Runs all six, reports high+medium only, one-paragraph verdict | — |
@@ -42,10 +42,12 @@ roughly 2-25 s per collector, about a minute for all six.
 ## Known baseline
 
 The repo is not finding-free by design; the accepted findings are documented
-in each SKILL.md ("Known baseline"). In short: crypto-adjacent crates
-(`getrandom`/`zeroize`/`subtle`) in cli/server/web are deliberate lows, and
-the two `export_key -> Vec<u8>` functions (extension key custody across MV3
-service-worker eviction) are deliberate mediums. They stay visible on purpose:
+in the SKILL.md "Known baseline" sections. On a clean tree: **0 high,
+2 medium, 10 low.** The mediums are the two `export_key -> Vec<u8>`
+functions (extension key custody across MV3 service-worker eviction). The
+lows are nine crypto-adjacent crate placements (`getrandom`/`zeroize`/
+`subtle` declarations and uses in cli/server/web) plus web's `DecryptedEntry`
+holding a password String at the JS boundary. They stay visible on purpose:
 an allowlisted-and-silent finding could grow new call sites unnoticed.
 
 ## Deliberately NOT checked here
@@ -75,7 +77,9 @@ an allowlisted-and-silent finding could grow new call sites unnoticed.
    **medium** = real drift or an extraction that lost its anchor; **low** =
    visible-by-design baseline or informational.
 4. Keep it deterministic: iterate `tracked` file lists (never glob the
-   filesystem), no timestamps, no network, no cargo, no writes.
+   filesystem), no timestamps, no network, no cargo, no writes. lib.sh pins
+   `LC_ALL=C`, and `.gitattributes` keeps `*.sh` LF — a CRLF checkout breaks
+   bash outside MSYS.
 5. If the check has an accepted baseline hit, prefer an exact-content
    allowlist that prints an OK line with the justification (see `sh-log`) —
    the moment the line changes, it re-flags.

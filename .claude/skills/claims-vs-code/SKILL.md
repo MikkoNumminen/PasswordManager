@@ -38,5 +38,11 @@ not. This skill diffs the two.
 
 A **high** finding means the docs promise something the code does not do (or
 extraction found disagreeing values). A **medium** finding means a claim has
-no locatable counterpart — usually the README was reworded and the
-collector's extraction pattern needs updating, which is itself worth knowing.
+no locatable counterpart; its `<path>` names the file whose extraction came
+up empty (README, an ADR, or a source file), and the fact line names the
+missing label — read THAT file to see whether the claim moved, was reworded,
+or the constant genuinely disappeared. Label-to-file legend: `readme*` =
+README.md, `adr0001*`/`adr0003*` = that ADR, `crypto_rs*`/`NONCE_LEN` =
+core/src/crypto.rs, `web_cargo_toml` = web/Cargo.toml, `cargo_lock` =
+Cargo.lock, `server_main*` = server/src/main.rs, `oauth2_proxy*` =
+ops/oauth2-proxy.cfg.

@@ -27,11 +27,13 @@ skill only runs them, merges the numbers, and reports what matters.
 3. Report:
    - Every FINDING of severity **high** and **medium**, one line each, in
      collector order, marking which are the known accepted baseline (the
-     per-skill SKILL.md files list them: crypto-adjacent low deps are
-     filtered out already; the two `za-export` mediums are documented
-     extension custody).
-   - Skip low findings and OK lines entirely (say how many lows exist,
-     nothing more).
+     per-skill SKILL.md files list them; on a clean tree the only baseline
+     mediums are the two `za-export` findings — documented extension key
+     custody).
+   - Skip low findings and OK lines entirely in the report (say how many
+     lows exist, nothing more). Note the collectors still EMIT the lows —
+     the current documented baseline is 10 (9 crypto-boundary crate
+     placements + web's DecryptedEntry) — you are filtering, they are not.
    - The six SUMMARY lines merged into one total:
      `TOTAL high=N medium=N low=N`.
    - A one-paragraph verdict: does the code still do what the README and

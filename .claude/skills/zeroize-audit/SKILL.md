@@ -41,8 +41,14 @@ every place a secret escapes into a raw `Vec<u8>` or `String`.
   baseline:** `web/src/lib.rs` `DecryptedEntry` (low) — it is serialized to
   JavaScript, which is the browser client's documented nature; the wasm-side
   copy is not wiped.
+- `za-skip` — any `#[zeroize(skip)]` attribute: fine on a non-secret field
+  (OK), **high** on a secret-named one — the derive stays visible while the
+  wiping silently stops, which would fool the other checks.
 - `za-copy` — `expose_secret()` copied into a plain String. OK when the copy
   moves into `EntryData` (zeroized on drop) or is the API token (not key
   material, cleartext custody by design per ADR 0007).
 - `za-rawfield` — secret-named raw fields; `key_check_*` and `token*` are
   non-secret by design and reported OK.
+- `za-keybuf` — derive_key's raw key buffer custody: zeroized on the error
+  path, moved into VaultKey on success. A finding here is a broken zeroize
+  path in key derivation (high), not a naming issue.

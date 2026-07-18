@@ -31,16 +31,27 @@ zero-knowledge design — what the code logs.
 - `sh-names` — files literally named token/secret/credential. Source modules
   (`vaultctl/src/secrets.rs` manages out-of-repo secrets) are OK by rule;
   their contents are covered by `sh-literals`.
-- `sh-ignore` — one line per required .gitignore pattern.
-- `sh-literals` — long base64/hex runs. Known-answer vectors in test files or
-  `#[cfg(test)]` modules are reported OK (they are supposed to exist);
-  `Cargo.lock` checksums are excluded. Anything else is high.
-- `sh-log` — every print/log/panic macro mentioning a secret word. Static
-  prompt text is OK; interpolating a secret-named value is high. Two exact
-  lines are allowlisted by content (the CLI `--reveal` printout and the
-  server `token` subcommand's one-time print) — any edit to them re-flags.
+- `sh-ignore` — one line per required .gitignore pattern (read CRLF-safe).
+- `sh-literals` — long base64/hex runs plus well-known credential shapes
+  (GitHub/Slack/OpenAI/AWS token prefixes, JWTs). Known-answer vectors in
+  test paths or `#[cfg(test)]` modules are reported OK (they are supposed to
+  exist); `Cargo.lock` checksums and sequential alphabet constants (the
+  password-generator charset) are recognized as non-secrets. Anything else
+  is high.
+- `sh-log` — every print/log/panic macro mentioning a secret word, with the
+  macro's wrapped continuation lines joined so rustfmt cannot hide an
+  argument. Static text is OK; a secret-named value outside string literals
+  is high. Module-path segments (`secrets::filled(...)`) are namespaces, not
+  values, and stay quiet — the function name still triggers if IT is
+  secret-named. Three deliberate statements are allowlisted by exact content
+  plus surrounding context (the CLI `--reveal` printout, the server `token`
+  subcommand's one-time print, vaultctl printing the token file PATH after
+  rotation) — any edit to them re-flags.
 - `sh-history` — secret-shaped file names ever added in any commit. A hit is
-  high even if the file was later deleted: history retains it.
+  high even if the file was later deleted: history retains it. On a shallow
+  clone (CI's default fetch-depth) the check degrades LOUDLY to a low
+  finding instead of printing a false "never added" certificate; give CI
+  `fetch-depth: 0` to run it for real.
 
 ## Deliberately out of scope
 

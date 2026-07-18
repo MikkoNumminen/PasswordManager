@@ -25,24 +25,38 @@ drift from that claim.
 
 ## Reading the output
 
-- `cb-deps` / `cb-use` — crypto crates outside `core/`. Severity encodes the
-  class: `argon2`, `chacha20poly1305`, `secrecy` outside core are **high**
-  (the boundary is broken); `getrandom`, `zeroize`, `subtle` are **low**
-  (hygiene/adjacent crates with known deliberate uses — see baseline).
+- `cb-deps` — crypto crates declared in a non-core Cargo.toml, in any form:
+  plain `x = "..."`, dotted `x.workspace = true`, table `[dependencies.x]`,
+  or a rename via `package = "x"`. Beyond the six crates the design names, a
+  broader net of common Rust crypto crates (aes-gcm, ring, pbkdf2, sha2, ...)
+  catches a NEW primitive appearing outside core.
+- `cb-use` — direct `use` imports AND fully-qualified `crate::` paths in
+  non-test product code outside `core/` (tests may drive crypto freely).
+- Severity encodes the class: `argon2`, `chacha20poly1305`, `secrecy`, and
+  anything from the broader net outside core are **high** (the boundary is
+  broken); `getrandom`, `zeroize`, `subtle` are **low** (hygiene/adjacent
+  crates with known deliberate uses — see baseline). One allowlisted
+  exception prints OK: the server's `sha2` (SHA-256 of the API token —
+  documented in `server/src/app.rs`; a hash of a non-key credential).
 - `cb-xor` — xor-assignment over buffers: hand-rolled cipher signal.
 - `cb-cmp` — `==`/`!=` on secret-named values instead of `subtle::ct_eq`.
 
+Known limit: a dependency renamed in Cargo.toml is caught at its declaration
+(`package = "..."`), but code calling it under the new name cannot be
+matched textually — the manifest finding is the tripwire.
+
 ## Known baseline (2026-07-18)
 
-Deliberate, documented low findings — report them as accepted baseline, not
-new drift:
+Deliberate, documented findings (9 low) — report them as accepted baseline,
+not new drift:
 
 - `cli`: `subtle` (constant-time password-confirm compare), `zeroize`
-  (terminal buffer wipe in `cli/src/prompt.rs`).
-- `server`: `getrandom` (API token generation), `subtle` (constant-time token
-  hash compare in `server/src/app.rs`). The server's Cargo.toml deliberately
-  imports core with no crypto features.
+  (terminal buffer wipe in `cli/src/prompt.rs`) — dep + use pairs.
+- `server`: `getrandom` (API token generation; qualified call in
+  `server/src/main.rs`), `subtle` (constant-time token hash compare in
+  `server/src/app.rs`) — dep + use pairs. `sha2` prints as allowlisted OK.
+  The server's Cargo.toml deliberately imports core with no crypto features.
 - `web`: `getrandom` with the `js` feature (routes the OS RNG to the
-  browser); the crate holds no crypto calls of its own.
+  browser); the crate holds no crypto calls of its own — dep only.
 
 Anything beyond this list, or any high finding, is new drift.

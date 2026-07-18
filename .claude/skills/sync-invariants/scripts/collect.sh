@@ -42,6 +42,12 @@ main() {
   # si-aead ------------------------------------------------------------------
   # Call sites of the core AEAD, with the AAD each one binds.
   sites=$(scan_code "$V" 'crypto::(encrypt|decrypt)\(')
+  # An empty enumeration is not success: it means the anchor pattern lost
+  # the call sites (e.g. a refactor to bare imported encrypt()/decrypt())
+  # and the whole AAD-per-site audit would silently evaporate.
+  if [ "$(printf '%s\n' "$sites" | grep -c .)" -eq 0 ]; then
+    review si-aead "$V:1-999" "no crypto::encrypt/decrypt call sites found; the enumeration lost its anchor (import-style refactor?) - locate the AEAD calls and re-anchor this check"
+  fi
   printf '%s\n' "$sites" | while IFS=: read -r ln txt; do
     [ -n "$ln" ] || continue
     if printf '%s' "$txt" | grep -q 'KEYCHECK_AAD'; then
@@ -51,10 +57,10 @@ main() {
       if printf '%s' "$pre" | grep -Eq '(entry_aad|tombstone_aad)\('; then
         ok si-aead "$V:$ln entry/tombstone AAD bound (uuid+modified_ms via helper)"
       else
-        review si-aead "$V:$((ln-6))-$ln" "AEAD call with an aad not visibly built by entry_aad/tombstone_aad; read this range"
+        review si-aead "$V:$(back "$ln" 6)-$ln" "AEAD call with an aad not visibly built by entry_aad/tombstone_aad; read this range"
       fi
     else
-      review si-aead "$V:$((ln-4))-$ln" "AEAD call with an unrecognized aad argument; read this range"
+      review si-aead "$V:$(back "$ln" 4)-$ln" "AEAD call with an unrecognized aad argument; read this range"
     fi
   done
   outside=$(rust_nontest | grep -Ev '^core/src/(vault|crypto)\.rs$' | while read -r f; do
@@ -119,14 +125,17 @@ main() {
   scan "$S" 'apply_synced\(' | while IFS=: read -r ln txt; do
     [ -n "$ln" ] || continue
     if printf '%s' "$txt" | grep -Eq 'apply_synced\(&?rrec\)'; then
-      [ -n "$filt" ] && ok si-pull "$S:$ln applies a record from the verified pull set" \
-        || review si-pull "$S:$((ln-10))-$ln" "applies a pull record but the verify filter was not found"
-    elif window "$S" $((ln > 10 ? ln - 10 : 1)) "$ln" | grep -q 'verify_record'; then
+      if [ -n "$filt" ]; then
+        ok si-pull "$S:$ln applies a record from the verified pull set"
+      else
+        review si-pull "$S:$(back "$ln" 10)-$ln" "applies a pull record but the verify filter was not found"
+      fi
+    elif window "$S" "$(back "$ln" 10)" "$ln" | grep -q 'verify_record'; then
       ok si-pull "$S:$ln guarded by verify_record in the preceding lines"
     elif printf '%s' "$txt" | grep -q 'winner_rec'; then
       : # resolve_conflict's remote-side winner; covered by the caller check below.
     else
-      review si-pull "$S:$((ln-10))-$ln" "apply_synced without a visible verify guard; read this range"
+      review si-pull "$S:$(back "$ln" 10)-$ln" "apply_synced without a visible verify guard; read this range"
     fi
   done
   # Every resolve_conflict caller must hand it a verified remote record.
@@ -135,10 +144,10 @@ main() {
     [ -n "$ln" ] || continue
     if printf '%s' "$txt" | grep -Eq ', &?rrec,'; then
       : # from the verified pull set
-    elif window "$S" $((ln > 4 ? ln - 4 : 1)) "$ln" | grep -q 'verify_record'; then
+    elif window "$S" "$(back "$ln" 4)" "$ln" | grep -q 'verify_record'; then
       : # explicitly verified just above
     else
-      review si-pull "$S:$((ln-6))-$ln" "resolve_conflict called with a remote record not visibly verified; read this range"
+      review si-pull "$S:$(back "$ln" 6)-$ln" "resolve_conflict called with a remote record not visibly verified; read this range"
     fi
   done
   ncalls=$(printf '%s\n' "$calls" | grep -c .)

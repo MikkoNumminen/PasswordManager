@@ -18,17 +18,39 @@ ADR_AEAD=docs/adr/0002-aead-xchacha20poly1305.md
 ADR_NONCE=docs/adr/0003-nonce-strategy.md
 CI=.github/workflows/ci.yml
 
+# Which file each claim label is extracted from, so a finding points at the
+# side that actually lost its anchor, not blindly at the README.
+path_for_label() {
+  case "$1" in
+    readme*)          echo README.md ;;
+    adr0001*)         echo "$ADR_KDF" ;;
+    adr0003*)         echo "$ADR_NONCE" ;;
+    crypto_rs*|NONCE_LEN) echo "$CRYPTO_RS" ;;
+    web_cargo_toml)   echo web/Cargo.toml ;;
+    cargo_lock)       echo Cargo.lock ;;
+    server_main*)     echo "$SERVER_MAIN" ;;
+    oauth2_proxy*)    echo ops/oauth2-proxy.cfg ;;
+    *)                echo README.md ;;
+  esac
+}
+
 # compare ID "claim-label=value ..." — all non-empty values equal -> OK,
-# any disagreement -> FINDING high, any empty value -> FINDING medium.
+# any disagreement -> FINDING high, any empty value -> FINDING medium
+# located at the file whose extraction came up empty.
 compare() {
   id=$1; shift
-  vals=""; missing=""; label_str="$*"
+  vals=""; missing=""; missing_path=""; label_str="$*"
   for pair in "$@"; do
     v=${pair#*=}
-    if [ -z "$v" ]; then missing="$missing ${pair%%=*}"; else vals="$vals $v"; fi
+    if [ -z "$v" ]; then
+      missing="$missing ${pair%%=*}"
+      [ -z "$missing_path" ] && missing_path=$(path_for_label "${pair%%=*}")
+    else
+      vals="$vals $v"
+    fi
   done
   if [ -n "$missing" ]; then
-    finding "$id" medium "README.md:0" "no locatable counterpart for:$missing ($label_str)"
+    finding "$id" medium "${missing_path}:0" "no locatable counterpart in this file for:$missing ($label_str)"
     return
   fi
   distinct=$(printf '%s\n' $vals | sort -u | grep -c .)
@@ -50,10 +72,11 @@ main() {
   adr_lanes=$(scan_o "$ADR_KDF" 'p_cost [0-9]+' | head -n1 | sed -E 's/.*p_cost ([0-9]+)/\1/')
   code_mem_expr=$(scan_code "$CRYPTO_RS" 'm_cost_kib: *[0-9]' | head -n1 | sed -E 's/.*m_cost_kib: *([0-9 *]+),?.*/\1/')
   code_kib=""
-  case "$code_mem_expr" in
-    *[!0-9\ \*]*|"") : ;;                         # unexpected shape: leave empty
-    *) code_kib=$(( code_mem_expr )) ;;
-  esac
+  # Only a complete product of integers is evaluated; a dangling operator
+  # (e.g. a rustfmt-wrapped "256 *") stays empty instead of crashing $((...)).
+  if printf '%s' "$code_mem_expr" | grep -Eq '^[0-9]+( *\* *[0-9]+)*$'; then
+    code_kib=$(( code_mem_expr ))
+  fi
   code_passes=$(scan_code "$CRYPTO_RS" 't_cost: *[0-9]' | head -n1 | sed -E 's/.*t_cost: *([0-9]+).*/\1/')
   code_lanes=$(scan_code "$CRYPTO_RS" 'p_cost: *[0-9]' | head -n1 | sed -E 's/.*p_cost: *([0-9]+).*/\1/')
   readme_kib=""; [ -n "$readme_mib" ] && readme_kib=$(( readme_mib * 1024 ))
