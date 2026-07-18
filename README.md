@@ -258,12 +258,14 @@ What it does:
 - The toolbar popup still does unlock, search, reveal, copy with 30 s
   clipboard clear, and fill (with an explicit warning plus confirmation for
   a deliberate domain mismatch).
-- The popup shows an update notice when the server reports a newer extension
-  version than the one installed. The server serves its built-from version at
-  `GET /api/v1/version` (unauthenticated; a version string is not secret), and
-  the extension compares it to its own. Updating stays manual, matching the
-  build-from-source model: pull, run `build.ps1`, and reload the extension.
-  The notice only appears once the server is rebuilt from the newer source.
+- When the server reports a newer extension version than the one installed, an
+  amber badge appears on the toolbar icon (visible on every tab, no popup
+  needed) and the popup shows the details. The server serves its built-from
+  version at `GET /api/v1/version` (unauthenticated; a version string is not
+  secret), and the extension compares it to its own on startup, after unlock,
+  and every few hours. Updating stays manual, matching the build-from-source
+  model: pull, run `build.ps1`, and reload the extension. The flag only appears
+  once the server is rebuilt from the newer source.
 
 Because the extension watches for login forms, Chrome's install prompt says
 it can read all sites; the content script holds no vault state and every
