@@ -1,0 +1,4 @@
+# Shell scripts must stay LF: a CRLF checkout (core.autocrlf=true is the
+# Git for Windows default) breaks bash outside MSYS - WSL, Docker, CI
+# containers bind-mounting a Windows worktree.
+*.sh text eol=lf
