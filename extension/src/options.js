@@ -8,6 +8,40 @@ async function load() {
   $("url").value = c.serverUrl || "";
   $("token").value = c.token || "";
   $("autolock").value = String(c.autoLockMinutes ?? 15);
+  await renderNeverList();
+}
+
+// Sites where the save banner is suppressed ("Never for this site").
+async function renderNeverList() {
+  const { neverSaveDomains } = await chrome.storage.local.get("neverSaveDomains");
+  const list = neverSaveDomains || [];
+  const ul = $("never-list");
+  ul.replaceChildren();
+  if (!list.length) {
+    const li = document.createElement("li");
+    li.className = "muted";
+    li.textContent = "none";
+    ul.appendChild(li);
+    return;
+  }
+  for (const domain of list) {
+    const li = document.createElement("li");
+    li.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:0.3rem 0;";
+    const span = document.createElement("span");
+    span.textContent = domain;
+    const rm = document.createElement("button");
+    rm.textContent = "remove";
+    rm.style.marginTop = "0";
+    rm.addEventListener("click", async () => {
+      const { neverSaveDomains: cur } = await chrome.storage.local.get("neverSaveDomains");
+      await chrome.storage.local.set({
+        neverSaveDomains: (cur || []).filter((d) => d !== domain),
+      });
+      await renderNeverList();
+    });
+    li.append(span, rm);
+    ul.appendChild(li);
+  }
 }
 
 function setStatus(text, cls) {

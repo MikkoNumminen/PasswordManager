@@ -9,7 +9,9 @@
 // stored anywhere.
 
 import init, { Session } from "../vendor/pkg/password_manager_web.js";
-import { matchLevel, hostOf, loadRuleset } from "./psl.js";
+import { matchLevel, hostOf, loadRuleset, registrableDomain } from "./psl.js";
+import { rankMatches } from "./rank.js";
+import { sameSite, shouldOfferSave, SAVE_TTL_MS } from "./savepolicy.js";
 
 const LOCAL = "local"; // chrome.storage.local: server config
 const SESSION = "session"; // chrome.storage.session: key, meta, index, records
@@ -135,20 +137,36 @@ async function doUnlock(password) {
     return { error: String(e?.message) === "wrong-password" ? "wrong master password" : String(e?.message ?? e) };
   }
 
-  const recordsJson = await (await api("/api/v1/entries")).text();
-  const index = JSON.parse(session.decrypt_index(recordsJson));
   const keyBytes = Array.from(session.export_key());
 
   freeLive(); // drop any prior session before replacing it
   liveSession = session;
-  await chrome.storage.session.set({
-    vaultKey: keyBytes,
-    metaJson,
-    index,
-    records: JSON.parse(recordsJson),
-  });
+  await chrome.storage.session.set({ vaultKey: keyBytes, metaJson });
+  await refreshEntries(session);
   await armAutoLock();
+  broadcastUnlocked();
   return { ok: true };
+}
+
+// Refetch and re-index the entries; shared by unlock and the post-save
+// refresh so a just-saved entry shows up everywhere without a relock.
+async function refreshEntries(session) {
+  const recordsJson = await (await api("/api/v1/entries")).text();
+  const index = JSON.parse(session.decrypt_index(recordsJson));
+  await chrome.storage.session.set({ index, records: JSON.parse(recordsJson) });
+}
+
+// Tell every page's content script the vault just unlocked so an open locked
+// dropdown or save banner can refresh. Best effort: most tabs have no
+// listener and reject.
+function broadcastUnlocked() {
+  chrome.tabs.query({}).then((tabs) => {
+    for (const t of tabs) {
+      if (t.id != null) {
+        chrome.tabs.sendMessage(t.id, { target: "content", type: "unlocked" }).catch(() => {});
+      }
+    }
+  });
 }
 
 async function decryptOne(id) {
@@ -243,6 +261,183 @@ async function clearClipboardIfUnchanged() {
   chrome.runtime.sendMessage({ target: "offscreen", type: "clipboard-clear", value: clipStamp });
 }
 
+// ---- content-script requests ------------------------------------------------
+//
+// Content scripts run inside arbitrary pages, so nothing they claim is
+// trusted: the host is derived from sender.url (set by Chrome, not the page)
+// and every answer is scoped to that host. They receive at most the match
+// rows for their own site, the one fill they asked for after the domain
+// gate, and a pending-save offer that never echoes the password back.
+
+// Validate a content-script sender: top frame, real tab, http(s) page.
+function csSender(sender) {
+  if (!sender?.tab || sender.tab.id == null || sender.frameId !== 0) return null;
+  const url = sender.url || "";
+  if (!/^https?:\/\//i.test(url)) return null;
+  const host = hostOf(url);
+  if (!host) return null;
+  try {
+    return { tabId: sender.tab.id, host, origin: new URL(url).origin };
+  } catch {
+    return null;
+  }
+}
+
+// The vault's own web page must never see autofill or capture: the master
+// password gets typed there.
+async function isServerOrigin(origin) {
+  const { serverUrl } = await getConfig();
+  if (!serverUrl) return false;
+  try {
+    return new URL(serverUrl).origin === origin;
+  } catch {
+    return false;
+  }
+}
+
+async function doGetMatches(cs) {
+  const { serverUrl } = await getConfig();
+  if (!serverUrl || (await isServerOrigin(cs.origin))) return { disabled: true };
+  // Passive: merely focusing a login field must not reset the auto-lock
+  // timer, so this deliberately skips armAutoLock.
+  const session = await ensureSession();
+  if (!session) return { locked: true };
+  const { index } = await sess();
+  const ruleset = await loadRuleset();
+  return rankMatches(cs.host, index || [], ruleset);
+}
+
+async function doCsFill(cs, id) {
+  const entry = await decryptOne(id);
+  if (!entry) return { error: "locked" };
+  const ruleset = await loadRuleset();
+  // The gate: values leave the worker only for the page's own site. Unlike
+  // the popup there is no confirmed-mismatch override on this path.
+  if (matchLevel(cs.host, hostOf(entry.url), ruleset) === "none") {
+    return { error: "entry does not match this site" };
+  }
+  return { username: entry.username || "", password: entry.password || "" };
+}
+
+const PENDING_KEY = "pendingSave";
+
+async function getPending() {
+  const got = await chrome.storage.session.get(PENDING_KEY);
+  return got[PENDING_KEY] || null;
+}
+
+async function saveContext() {
+  const ruleset = await loadRuleset();
+  const session = await ensureSession();
+  const { index } = session ? await sess() : {};
+  const { neverSaveDomains } = await chrome.storage.local.get("neverSaveDomains");
+  return { ruleset, session, index: index || [], neverList: neverSaveDomains || [] };
+}
+
+async function capturePendingSave(cs, { username, password }) {
+  // The response is {ok:true} on every path: the page learns nothing about
+  // what was kept or why.
+  if (typeof password !== "string" || !password || password.length > 1024) return { ok: true };
+  if (typeof username !== "string" || username.length > 512) return { ok: true };
+  if (await isServerOrigin(cs.origin)) return { ok: true };
+  const { ruleset, session, index, neverList } = await saveContext();
+  const pending = {
+    id: crypto.randomUUID(),
+    host: cs.host,
+    origin: cs.origin,
+    username,
+    password,
+    ts: Date.now(),
+  };
+  const verdict = shouldOfferSave({
+    pending,
+    now: pending.ts,
+    senderHost: cs.host,
+    index,
+    neverList,
+    ruleset,
+    locked: !session,
+  });
+  if (verdict.offer) {
+    await chrome.storage.session.set({ [PENDING_KEY]: pending });
+  }
+  return { ok: true };
+}
+
+async function checkPendingSave(cs) {
+  const { serverUrl } = await getConfig();
+  if (!serverUrl || (await isServerOrigin(cs.origin))) return { disabled: true };
+  const pending = await getPending();
+  if (!pending) return { none: true };
+  const { ruleset, session, index, neverList } = await saveContext();
+  const verdict = shouldOfferSave({
+    pending,
+    now: Date.now(),
+    senderHost: cs.host,
+    index,
+    neverList,
+    ruleset,
+    locked: !session,
+  });
+  if (!verdict.offer) {
+    // Terminal verdicts drop the capture; "different-site" keeps it, the
+    // TTL bounds its life if no same-site page ever asks.
+    if (["expired", "known", "never-listed"].includes(verdict.reason)) {
+      await chrome.storage.session.remove(PENDING_KEY);
+    }
+    return { none: true };
+  }
+  return {
+    offer: { offerId: pending.id, username: pending.username, host: pending.host },
+    locked: !session,
+  };
+}
+
+async function doSaveEntry(cs, offerId) {
+  const pending = await getPending();
+  const ruleset = await loadRuleset();
+  if (
+    !pending ||
+    pending.id !== offerId ||
+    Date.now() - pending.ts > SAVE_TTL_MS ||
+    !sameSite(pending.host, cs.host, ruleset)
+  ) {
+    return { error: "nothing to save" };
+  }
+  const session = await ensureSession();
+  if (!session) return { locked: true };
+  const id = crypto.randomUUID();
+  const now = Date.now();
+  const data = {
+    title: registrableDomain(pending.host, ruleset) || pending.host,
+    username: pending.username,
+    password: pending.password,
+    url: pending.origin,
+    notes: "",
+    created_ms: now,
+  };
+  const record = session.seal_entry(id, now, JSON.stringify(data));
+  const resp = await api(`/api/v1/entries/${id}`, { method: "PUT", body: record });
+  if (!resp.ok) return { error: `save failed (${resp.status})` };
+  await refreshEntries(session);
+  await chrome.storage.session.remove(PENDING_KEY);
+  await armAutoLock();
+  return { ok: true };
+}
+
+async function neverForSite(cs, offerId) {
+  const pending = await getPending();
+  if (!pending || pending.id !== offerId) return { ok: true };
+  const ruleset = await loadRuleset();
+  const domain = registrableDomain(cs.host, ruleset) || cs.host.toLowerCase();
+  const { neverSaveDomains } = await chrome.storage.local.get("neverSaveDomains");
+  const list = neverSaveDomains || [];
+  if (!list.includes(domain)) list.push(domain);
+  await chrome.storage.local.set({ neverSaveDomains: list });
+  await chrome.storage.session.remove(PENDING_KEY);
+  return { ok: true };
+}
+
 // ---- alarms ----------------------------------------------------------------
 
 chrome.alarms.onAlarm.addListener((alarm) => {
@@ -256,6 +451,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg.target && msg.target !== "background") return; // not for us
   (async () => {
     try {
+      // Everything prefixed cs. comes from a content script inside an
+      // arbitrary page; validate the sender once, up front.
+      let cs = null;
+      if (typeof msg.type === "string" && msg.type.startsWith("cs.")) {
+        cs = csSender(sender);
+        if (!cs) return { error: "bad sender" };
+      }
       switch (msg.type) {
         case "getState": {
           const { serverUrl } = await getConfig();
@@ -281,6 +483,37 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "lock":
           await lock();
           return { ok: true };
+        case "cs.getMatches":
+          return await doGetMatches(cs);
+        case "cs.fill":
+          return await doCsFill(cs, msg.id);
+        case "cs.pendingSave":
+          return await capturePendingSave(cs, msg);
+        case "cs.checkPendingSave":
+          return await checkPendingSave(cs);
+        case "cs.saveNow":
+          return await doSaveEntry(cs, msg.offerId);
+        case "cs.dismissPendingSave": {
+          const pending = await getPending();
+          if (pending && pending.id === msg.offerId) {
+            await chrome.storage.session.remove(PENDING_KEY);
+          }
+          return { ok: true };
+        }
+        case "cs.neverForSite":
+          return await neverForSite(cs, msg.offerId);
+        case "cs.openPopup":
+          try {
+            await chrome.action.openPopup();
+            return { ok: true };
+          } catch {
+            return { error: "click the toolbar icon to unlock" };
+          }
+        case "cs.openServer": {
+          const { serverUrl } = await getConfig();
+          if (serverUrl) await chrome.tabs.create({ url: serverUrl });
+          return { ok: true };
+        }
         default:
           return { error: `unknown message ${msg.type}` };
       }
