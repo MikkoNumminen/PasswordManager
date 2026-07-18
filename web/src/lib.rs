@@ -42,6 +42,17 @@ struct DecryptedEntry {
     modified_ms: i64,
 }
 
+/// Just enough to search, match, and display an entry. No password: the
+/// index the extension keeps must never hold one.
+#[derive(serde::Serialize)]
+struct IndexEntry {
+    id: String,
+    title: String,
+    username: String,
+    url: String,
+    modified_ms: i64,
+}
+
 fn err(e: impl std::fmt::Display) -> JsError {
     JsError::new(&e.to_string())
 }
@@ -59,6 +70,69 @@ impl Session {
             Err(VaultError::WrongPassword) => Err(JsError::new(WRONG_PASSWORD_CODE)),
             Err(e) => Err(err(e)),
         }
+    }
+
+    /// Reconstruct a session from key bytes previously returned by
+    /// `export_key`, verifying them against the vault metadata. Skips the
+    /// Argon2 derivation, so it is fast: for the browser extension to resume
+    /// after its MV3 service worker was evicted, using the key it kept in
+    /// `chrome.storage.session`. A wrong or corrupt key reports wrong-password.
+    pub fn from_key(meta_json: &str, key_bytes: &[u8]) -> Result<Session, JsError> {
+        let meta: VaultMeta = serde_json::from_str(meta_json).map_err(err)?;
+        match Vault::from_key_bytes(key_bytes, &meta) {
+            Ok(vault) => Ok(Session { vault }),
+            Err(VaultError::WrongPassword) => Err(JsError::new(WRONG_PASSWORD_CODE)),
+            Err(e) => Err(err(e)),
+        }
+    }
+
+    /// Export the vault key so the extension can hold it in
+    /// `chrome.storage.session` (memory only, never disk) across a worker
+    /// restart. The bytes stay inside the extension; never persist or send
+    /// them.
+    pub fn export_key(&self) -> Vec<u8> {
+        self.vault.export_key()
+    }
+
+    /// Decrypt only the fields needed to search, match, and display entries.
+    /// Passwords are deliberately excluded, so the index the caller keeps
+    /// holds no secret. Tombstones skipped; sorted by title.
+    pub fn decrypt_index(&self, records_json: &str) -> Result<String, JsError> {
+        let records: Vec<EntryRecord> = serde_json::from_str(records_json).map_err(err)?;
+        let mut out = Vec::new();
+        for record in &records {
+            if record.deleted {
+                continue;
+            }
+            let data = self.vault.open_entry(record).map_err(err)?;
+            out.push(IndexEntry {
+                id: record.id.to_string(),
+                title: data.title.clone(),
+                username: data.username.clone(),
+                url: data.url.clone(),
+                modified_ms: record.modified_ms,
+            });
+        }
+        out.sort_by_key(|e| e.title.to_lowercase());
+        serde_json::to_string(&out).map_err(err)
+    }
+
+    /// Decrypt one record fully, including the password, for an explicit fill
+    /// or copy. The caller uses the result immediately and drops it.
+    pub fn decrypt_one(&self, record_json: &str) -> Result<String, JsError> {
+        let record: EntryRecord = serde_json::from_str(record_json).map_err(err)?;
+        let data = self.vault.open_entry(&record).map_err(err)?;
+        let out = DecryptedEntry {
+            id: record.id.to_string(),
+            title: data.title.clone(),
+            username: data.username.clone(),
+            password: data.password.clone(),
+            url: data.url.clone(),
+            notes: data.notes.clone(),
+            created_ms: data.created_ms,
+            modified_ms: record.modified_ms,
+        };
+        serde_json::to_string(&out).map_err(err)
     }
 
     /// Decrypt a JSON array of entry records. Tombstones are skipped.

@@ -1,0 +1,28 @@
+{
+  "manifest_version": 3,
+  "name": "PasswordManager",
+  "version": "0.1.0",
+  "description": "Fill credentials from your zero-knowledge vault. All crypto runs in the extension; the server only serves ciphertext.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting",
+    "alarms",
+    "offscreen",
+    "clipboardRead",
+    "clipboardWrite"
+  ],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "background": {
+    "service_worker": "src/background.js",
+    "type": "module"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "PasswordManager"
+  },
+  "options_page": "options.html",
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  }
+}

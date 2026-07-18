@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PasswordManager options</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background: #14161a; color: #e6e6e6;
+         max-width: 34rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { font-size: 1.2rem; }
+  label { display: block; color: #9aa4b2; font-size: 0.85rem; margin-top: 0.9rem; }
+  input, select { width: 100%; box-sizing: border-box; background: #14161a;
+    color: #e6e6e6; border: 1px solid #3a4150; border-radius: 4px;
+    padding: 0.5rem; font-size: 1rem; margin-top: 0.25rem; }
+  button { margin-top: 1rem; background: #2f6feb; color: #fff; border: 0;
+    border-radius: 4px; padding: 0.5rem 1rem; font-size: 0.95rem; cursor: pointer; }
+  .muted { color: #9aa4b2; font-size: 0.85rem; }
+  .error { color: #ff7b72; }
+  .ok { color: #57c46b; }
+</style>
+</head>
+<body>
+<h1>PasswordManager</h1>
+<p class="muted">Point the extension at your sync server. All decryption
+happens locally; the server only serves ciphertext.</p>
+
+<label for="url">Server URL</label>
+<input id="url" type="url" placeholder="https://your-host.ts.net:8443" autocomplete="off" />
+
+<label for="token">API token</label>
+<input id="token" type="password" autocomplete="off" />
+<p class="muted">The token authorizes ciphertext access only, but treat it as
+sensitive: keep it off shared machines.</p>
+
+<label for="autolock">Auto-lock after</label>
+<select id="autolock">
+  <option value="5">5 minutes</option>
+  <option value="15" selected>15 minutes</option>
+  <option value="60">60 minutes</option>
+  <option value="0">until the browser closes</option>
+</select>
+
+<button id="save">Save</button>
+<p id="status" class="muted"></p>
+
+<script type="module" src="src/options.js"></script>
+</body>
+</html>

@@ -66,14 +66,44 @@ impl Vault {
             )));
         }
         let key = crypto::derive_key(password.expose_secret().as_bytes(), &meta.salt, &meta.kdf)?;
-        crypto::decrypt(
-            &key,
-            KEYCHECK_AAD,
-            &meta.key_check_nonce,
-            &meta.key_check_ct,
-        )
-        .map_err(|_| VaultError::WrongPassword)?;
+        Self::check_key(&key, meta)?;
         Ok(Self { key })
+    }
+
+    /// Reconstruct an unlocked vault from previously exported key bytes,
+    /// verifying them against the key check. This skips the expensive Argon2
+    /// derivation, so it is only for a client that already unlocked once and
+    /// stashed the key in a memory-only store it cannot keep a live object in
+    /// (the browser extension across a service-worker restart). Wrong length
+    /// or a failed key check is rejected as a wrong password.
+    pub fn from_key_bytes(key_bytes: &[u8], meta: &VaultMeta) -> Result<Self, VaultError> {
+        if meta.version != VAULT_FORMAT_VERSION {
+            return Err(VaultError::Meta(format!(
+                "unsupported vault format version {}",
+                meta.version
+            )));
+        }
+        let array: [u8; crypto::KEY_LEN] = key_bytes
+            .try_into()
+            .map_err(|_| VaultError::WrongPassword)?;
+        let key = VaultKey::from_bytes(Box::new(array));
+        Self::check_key(&key, meta)?;
+        Ok(Self { key })
+    }
+
+    /// Export the raw vault key. Only for a client that must hold the key in a
+    /// memory-only store across a restart it cannot avoid (the browser
+    /// extension's `chrome.storage.session`, which is never written to disk).
+    /// The bytes stay inside that client; never persist or transmit them. The
+    /// CLI and the web page never call this.
+    pub fn export_key(&self) -> Vec<u8> {
+        self.key.as_bytes().to_vec()
+    }
+
+    fn check_key(key: &VaultKey, meta: &VaultMeta) -> Result<(), VaultError> {
+        crypto::decrypt(key, KEYCHECK_AAD, &meta.key_check_nonce, &meta.key_check_ct)
+            .map(|_| ())
+            .map_err(|_| VaultError::WrongPassword)
     }
 
     /// Encrypt an entry payload into a record ready for storage. The

@@ -238,6 +238,36 @@ fn conflict_copy_ids_are_stable_and_collision_free() {
 }
 
 #[test]
+fn exported_key_reconstructs_a_working_vault() {
+    let (vault, meta) = Vault::create(&password("master"), test_kdf()).unwrap();
+    let record = vault
+        .seal_entry(new_entry_id().unwrap(), 100, &sample_entry())
+        .unwrap();
+
+    // Export the key, reconstruct a vault from the bytes (no Argon2), and
+    // decrypt the record with the reconstructed vault.
+    let key = vault.export_key();
+    assert_eq!(key.len(), 32);
+    let reopened = Vault::from_key_bytes(&key, &meta).unwrap();
+    assert_eq!(reopened.open_entry(&record).unwrap(), sample_entry());
+}
+
+#[test]
+fn from_key_bytes_rejects_wrong_key_and_bad_length() {
+    let (_, meta) = Vault::create(&password("master"), test_kdf()).unwrap();
+    // Wrong 32-byte key: valid length, fails the key check.
+    assert!(matches!(
+        Vault::from_key_bytes(&[0u8; 32], &meta).unwrap_err(),
+        VaultError::WrongPassword
+    ));
+    // Wrong length.
+    assert!(matches!(
+        Vault::from_key_bytes(&[0u8; 16], &meta).unwrap_err(),
+        VaultError::WrongPassword
+    ));
+}
+
+#[test]
 fn tombstone_authentication_detects_forgery() {
     let (vault, _) = Vault::create(&password("master"), test_kdf()).unwrap();
     let id = new_entry_id().unwrap();
