@@ -12,6 +12,7 @@ import init, { Session } from "../vendor/pkg/password_manager_web.js";
 import { matchLevel, hostOf, loadRuleset, registrableDomain } from "./psl.js";
 import { rankMatches } from "./rank.js";
 import { sameSite, shouldOfferSave, SAVE_TTL_MS } from "./savepolicy.js";
+import { isBehind } from "./version.js";
 
 const LOCAL = "local"; // chrome.storage.local: server config
 const SESSION = "session"; // chrome.storage.session: key, meta, index, records
@@ -122,6 +123,28 @@ async function api(path, { method = "GET", body } = {}) {
 }
 
 // ---- operations ------------------------------------------------------------
+
+// Ask the server which extension version it was built from and compare it to
+// this installed one. A plain fetch, deliberately not through api(): the
+// update check must never lock the vault on a 401 or throw AuthRequired, and
+// any failure just means "don't nag".
+async function checkUpdate() {
+  const { serverUrl } = await getConfig();
+  if (!serverUrl) return { behind: false };
+  try {
+    const resp = await fetch(serverUrl.replace(/\/$/, "") + "/api/v1/version", {
+      credentials: "include",
+      cache: "no-store",
+    });
+    const ct = resp.headers.get("content-type") || "";
+    if (!resp.ok || !ct.includes("application/json")) return { behind: false };
+    const latest = (await resp.json()).extension;
+    const current = chrome.runtime.getManifest().version;
+    return { current, latest, behind: isBehind(current, latest) };
+  } catch {
+    return { behind: false };
+  }
+}
 
 async function doUnlock(password) {
   await ensureWasm();
@@ -494,6 +517,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         case "lock":
           await lock();
           return { ok: true };
+        case "checkUpdate":
+          return await checkUpdate();
         case "cs.getMatches":
           return await doGetMatches(cs);
         case "cs.fill":

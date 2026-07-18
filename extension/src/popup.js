@@ -27,6 +27,8 @@ async function boot() {
   tabHost = hostOf(tab?.url || "");
   ruleset = await loadRuleset();
 
+  checkUpdate(); // fire and forget; the banner appears if a newer build exists
+
   const state = await send({ type: "getState" });
   if (!state.configured) {
     show("needs-config");
@@ -66,6 +68,15 @@ async function unlock() {
   }
   hide("locked");
   await showVault();
+}
+
+async function checkUpdate() {
+  const r = await send({ type: "checkUpdate" });
+  if (!r || !r.behind) return;
+  $("update").textContent =
+    `Update available: v${r.latest} (you have v${r.current}). ` +
+    `Pull the repo, run build.ps1, and reload the extension.`;
+  show("update");
 }
 
 function showAuth() {
