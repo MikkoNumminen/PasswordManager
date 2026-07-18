@@ -39,4 +39,16 @@ if (-not (Test-Path $psl)) {
     if ($LASTEXITCODE -ne 0) { throw "public suffix list download failed ($LASTEXITCODE)" }
 }
 
-Write-Host "done. Load extension\ unpacked in chrome://extensions (Developer mode)."
+# 3. Verify: every file the extension needs to load, by name. If this passes,
+#    Load unpacked will work; if a file is missing, say which one and fail.
+$needed = @(
+    "manifest.json", "popup.html", "options.html", "offscreen.html",
+    "src\background.js", "src\popup.js", "src\options.js", "src\offscreen.js", "src\psl.js",
+    "vendor\pkg\password_manager_web.js", "vendor\pkg\password_manager_web_bg.wasm",
+    "vendor\public_suffix_list.dat"
+)
+$missing = $needed | Where-Object { -not (Test-Path (Join-Path $PSScriptRoot $_)) }
+if ($missing) { throw "build incomplete, missing: $($missing -join ', ')" }
+
+Write-Host "done: all $($needed.Count) files present."
+Write-Host "Load this folder unpacked in chrome://extensions (Developer mode): $PSScriptRoot"

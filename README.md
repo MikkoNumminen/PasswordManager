@@ -255,18 +255,24 @@ the same as any client. The vault key sits in memory-backed session storage
 (never on disk) while unlocked and is cleared on auto-lock or when the browser
 closes.
 
-Build and load:
+Build and load. The build script needs only the tools the web page build
+already uses (the wasm target and wasm-bindgen-cli, see Web access page
+above); it works in both Windows PowerShell and pwsh, builds the wasm,
+downloads the Public Suffix List into `vendor/`, and verifies every file the
+extension needs is present before declaring success. Re-run it after any
+`core` change; it is safe to run repeatedly.
 
 ```
 cd extension
-pwsh build.ps1        # builds the wasm and downloads the Public Suffix List into vendor/
+powershell -ExecutionPolicy Bypass -File build.ps1
 ```
 
 Then open `chrome://extensions`, enable Developer mode, Load unpacked, and
 pick the `extension/` directory. Open the extension's options, set the server
 URL and API token (Chrome will prompt to grant access to that one origin),
 and, if the public path is behind an auth gate, sign in once in a normal tab
-so the extension can ride the cookie.
+so the extension can ride the cookie. After pulling a new version, run the
+build script again and click the reload arrow on the extension card.
 
 Extension tests (registrable-domain matching, including the phishing cases):
 
