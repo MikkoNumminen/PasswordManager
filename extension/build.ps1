@@ -44,6 +44,8 @@ if (-not (Test-Path $psl)) {
 $needed = @(
     "manifest.json", "popup.html", "options.html", "offscreen.html",
     "src\background.js", "src\popup.js", "src\options.js", "src\offscreen.js", "src\psl.js",
+    "src\rank.js", "src\savepolicy.js", "src\version.js",
+    "src\content\detect.js", "src\content\dropdown.js", "src\content\banner.js", "src\content\main.js",
     "vendor\pkg\password_manager_web.js", "vendor\pkg\password_manager_web_bg.wasm",
     "vendor\public_suffix_list.dat"
 )

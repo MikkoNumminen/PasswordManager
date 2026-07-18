@@ -6,6 +6,10 @@
 use uuid::Uuid;
 
 pub const HEALTH: &str = "/api/v1/health";
+/// Reports the extension version this server was built from, so the browser
+/// extension can tell the user when a newer build is available. Unauthenticated
+/// like HEALTH: a version string is not secret.
+pub const VERSION: &str = "/api/v1/version";
 pub const VAULT: &str = "/api/v1/vault";
 pub const ENTRIES: &str = "/api/v1/entries";
 /// axum route pattern for one entry.

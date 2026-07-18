@@ -57,6 +57,7 @@ pub fn router(state: Arc<AppState>, web_dir: Option<std::path::PathBuf>) -> Rout
         .route_layer(middleware::from_fn_with_state(state.clone(), auth));
     let mut router = Router::new()
         .route(api::HEALTH, get(|| async { "ok" }))
+        .route(api::VERSION, get(version))
         .merge(protected);
     if let Some(dir) = web_dir {
         // no-cache: the browser may cache the assets but must revalidate on
@@ -94,6 +95,25 @@ async fn auth(State(state): State<Arc<AppState>>, req: Request, next: Next) -> R
         return api_err(StatusCode::UNAUTHORIZED, "missing or invalid token").into_response();
     }
     next.run(req).await
+}
+
+/// The extension version this build was compiled from, read from the
+/// extension manifest at compile time so there is one source of truth. The
+/// extension compares it against its own installed version and, when behind,
+/// tells the user to pull and reload. Unauthenticated: not secret.
+async fn version() -> Json<serde_json::Value> {
+    const MANIFEST: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../extension/manifest.json"
+    ));
+    static EXTENSION_VERSION: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    let v = EXTENSION_VERSION.get_or_init(|| {
+        serde_json::from_str::<serde_json::Value>(MANIFEST)
+            .ok()
+            .and_then(|m| m.get("version").and_then(|v| v.as_str()).map(String::from))
+            .unwrap_or_default()
+    });
+    Json(json!({ "extension": v }))
 }
 
 async fn get_vault(State(state): State<Arc<AppState>>) -> Result<Json<VaultMeta>, ApiError> {

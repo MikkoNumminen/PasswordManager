@@ -2,7 +2,10 @@
 
 ## Status
 
-Accepted (extension phase 1, read-only daily driver).
+Accepted (extension phase 1, read-only daily driver). Two decisions are
+superseded by ADR 0009 (phase 2): the extension is no longer read-only, and
+it now runs a standing content script for in-page autofill and save offers.
+Key handling, session storage, the popup fill policy, and PSL matching stand.
 
 ## Context
 
