@@ -141,8 +141,13 @@ async function doUnlock(password) {
 
   freeLive(); // drop any prior session before replacing it
   liveSession = session;
-  await chrome.storage.session.set({ vaultKey: keyBytes, metaJson });
-  await refreshEntries(session);
+  try {
+    await chrome.storage.session.set({ vaultKey: keyBytes, metaJson });
+    await refreshEntries(session);
+  } catch (e) {
+    await lock(); // no half-unlocked state: key stored but entries missing
+    throw e;
+  }
   await armAutoLock();
   broadcastUnlocked();
   return { ok: true };
@@ -419,8 +424,14 @@ async function doSaveEntry(cs, offerId) {
   const record = session.seal_entry(id, now, JSON.stringify(data));
   const resp = await api(`/api/v1/entries/${id}`, { method: "PUT", body: record });
   if (!resp.ok) return { error: `save failed (${resp.status})` };
-  await refreshEntries(session);
+  // The entry is on the server: clear the capture before the index refresh
+  // so a refresh hiccup cannot report failure and invite a duplicate save.
   await chrome.storage.session.remove(PENDING_KEY);
+  try {
+    await refreshEntries(session);
+  } catch {
+    // saved; the index catches up on the next unlock
+  }
   await armAutoLock();
   return { ok: true };
 }
