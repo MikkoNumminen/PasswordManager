@@ -16,8 +16,8 @@ crypto implementation shared by every client.
   (tailnet path, the Google-gated public path, and the shared Tailscale
   funnel). See `ops/README.md`.
 - `extension`: Chrome (Manifest V3) browser extension. The same `core` crypto
-  compiled to wasm32; looks up an entry for the current site and fills it,
-  read-only. See the Browser extension section below.
+  compiled to wasm32; offers and fills credentials on login pages and saves
+  newly typed ones. See the Browser extension section below.
 
 ## Threat model
 
@@ -238,22 +238,40 @@ key material, and credential files as a backstop.
 
 ## Browser extension
 
-A Chrome Manifest V3 extension that fills credentials from the vault into the
-current tab, without opening the web page. It reuses the same `core` crypto
-compiled to wasm32; the master password and vault key never leave the
-extension, and the server still only serves ciphertext. It is read-only:
-add, edit, and delete stay in the CLI and web page.
+A Chrome Manifest V3 extension that offers and fills credentials on login
+pages and saves newly typed ones, like the commercial managers. It reuses the
+same `core` crypto compiled to wasm32; the master password and vault key
+never leave the extension, and the server still only serves ciphertext.
+Editing and deleting stay in the CLI and web page.
 
-What it does: unlock, search, view (masked, reveal on click), fill into the
-current tab on an explicit click, and copy to the clipboard. It never
-auto-fills on page load, and it fills only when the entry's registrable
-domain (eTLD+1, via the Public Suffix List) matches the current tab, with an
-explicit warning and a second confirmation for a deliberate mismatch.
+What it does:
+
+- On a login page whose site is in the vault, focusing the form shows an
+  inline dropdown of matching entries; picking one fills the form. Matching
+  is by registrable domain (eTLD+1, via the Public Suffix List), and the
+  service worker refuses to release credentials to any other domain, with no
+  override on this path. Nothing fills without a click.
+- After you log in with credentials the vault does not know, a banner offers
+  to save them (Save / Never for this site / Dismiss). Saving seals the
+  entry locally and uploads only ciphertext. Never-listed sites are managed
+  in the options page.
+- The toolbar popup still does unlock, search, reveal, copy with 30 s
+  clipboard clear, and fill (with an explicit warning plus confirmation for
+  a deliberate domain mismatch).
+
+Because the extension watches for login forms, Chrome's install prompt says
+it can read all sites; the content script holds no vault state and every
+credential release is gated in the worker by the sender's registrable domain
+(ADR 0009). Both features are disabled on the vault server's own page, where
+the master password is typed. v1 limits: top-frame forms only (no iframe
+logins), no HTTP Basic auth, no autofill on hosts without a registrable
+domain (localhost), and a changed password does not re-prompt for saving.
 
 Trust delta: a compromised browser profile reads whatever you decrypt in it,
 the same as any client. The vault key sits in memory-backed session storage
 (never on disk) while unlocked and is cleared on auto-lock or when the browser
-closes.
+closes. A captured login waits in the same memory-only storage for at most
+two minutes before the offer expires.
 
 Build and load. The build script needs only the tools the web page build
 already uses (the wasm target and wasm-bindgen-cli, see Web access page
@@ -281,7 +299,7 @@ cd extension
 node --test test/psl.test.js
 ```
 
-Manual test checklist:
+Manual test checklist (popup):
 
 - Unlock with the master password; a wrong password is rejected.
 - Search; entries for the current site show first, with an "all sites" toggle.
@@ -293,6 +311,21 @@ Manual test checklist:
 - Copy a password: it clears from the clipboard after 30 seconds if unchanged.
 - Behind an auth gate, a fetch that hits the login page shows "sign in
   required" with a button to open the server.
+
+Manual test checklist (in-page autofill and save; start
+`node extension/test/manual/login-server.mjs` and add a vault entry for
+`http://127.0.0.1:8099` first):
+
+- Focus the login form at `/`: the dropdown lists the entry; picking it fills
+  both fields. Locked, the dropdown offers unlock instead.
+- Log in at `/` with new credentials: the banner appears on the welcome page;
+  Save adds the entry, visible in the popup without relocking.
+- Log in with the same credentials again: no banner (already known).
+- "Never for this site": no more banners there, autofill still offered, and
+  the domain can be removed in options.
+- `/spa` logs in without navigating: the banner appears on the same page.
+- `/change` has three password fields: no dropdown, no banner.
+- The vault server's own page gets neither dropdown nor banner.
 
 ## Development
 
